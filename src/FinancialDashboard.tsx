@@ -2,7 +2,7 @@
 import React from 'react'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend, BarChart, Bar
+  PieChart, Pie, Cell, Legend, BarChart, Bar, AreaChart, Area,
 } from 'recharts'
 import { TrendingUp, TrendingDown, DollarSign, BarChart3, Target, Wallet, Calculator, PieChart as PieIcon } from 'lucide-react'
 import * as XLSX from 'xlsx'
@@ -87,7 +87,7 @@ const FinancialDashboard: React.FC = () => {
   const [netWorthDF, setNetWorthDF] = React.useState<Row[]>([])
   const [combinedNetWorthDF, setCombinedNetWorthDF] = React.useState<Row[]>([])
   const [fiProgressDF, setFiProgressDF] = React.useState<Row[]>([])
-
+  const [rawNetWorthDF, setRawNetWorthDF] = React.useState<Row[]>([]);
   const [activeTab, setActiveTab] = React.useState<'overview' | 'expenses' | 'savings' | 'networth' | 'portfolio' | 'fire'>('overview')
   const [selectedMonth, setSelectedMonth] = React.useState<string>('')
 
@@ -99,6 +99,7 @@ const FinancialDashboard: React.FC = () => {
   const [totalValue, setTotalValue] = React.useState<number>(0)
   const [loadingPortfolio, setLoadingPortfolio] = React.useState<boolean>(false)
   const [portfolioError, setPortfolioError] = React.useState<string | null>(null)
+  
   const fmtILS = (n: number) => `₪${Math.round(n).toLocaleString()}`
   const [financeStats, setFinanceStats] = React.useState<{months: number; expRows: number; incRows: number}>({
     months: 0, expRows: 0, incRows: 0
@@ -347,7 +348,7 @@ const FinancialDashboard: React.FC = () => {
     () => combinedPortfolio.reduce((a,b)=> a + (b.value || b.qty*b.price || 0), 0),
     [combinedPortfolio]
   )
-
+  
   const categoryAgg = React.useMemo(() => {
     const m = new Map<string, number>()
     for (const p of combinedPortfolio) {
@@ -366,6 +367,66 @@ const FinancialDashboard: React.FC = () => {
       .map(p => ({ name: p.name || p.ticker, value: p.value || (p.qty * p.price) }))
   }, [combinedPortfolio])
 
+  const handleEditStock = (ticker: string) => {
+    const stock = portfolio.find(p => p.ticker === ticker);
+    if (!stock) return;
+
+    const newQtyStr = prompt(`Enter new quantity for ${ticker}:`, String(stock.qty));
+    if (newQtyStr === null) return; // User cancelled
+
+    const newQty = Number(newQtyStr);
+    if (!isNaN(newQty) && newQty >= 0) {
+      setPortfolio(prevPortfolio => 
+        prevPortfolio.map(p => 
+          p.ticker === ticker 
+            ? { ...p, qty: newQty, value: newQty * p.price } // Update qty and value
+            : p
+        )
+      );
+    } else {
+      alert("Invalid quantity entered.");
+    }
+  };
+
+  const extractLowRiskItems = (fullNetWorthData: Row[]) => {
+    try {
+      if (!fullNetWorthData || fullNetWorthData.length === 0) {
+        setLowRiskItems([]);
+        return;
+      }
+      const headers = Object.keys(fullNetWorthData[0] ?? {});
+      const idxMonth = 0;
+      const idxCash = 1;
+      const idxMMF = 2;
+      const idxBonds = 3;
+      const idxStocks = 4;
+      const idxHishtalmut = 5;
+      const idxProvFund = 6;
+      const idxRealEstate = 7;
+      const idxCrypto = 10;
+      const key = (i: number) => headers[i];
+
+      const lastRow = [...fullNetWorthData].reverse().find((r: any) => {
+        const d = toDate(r[key(idxMonth)]);
+        return d instanceof Date && !isNaN(+d);
+      });
+
+      if (lastRow) {
+        const cash = toNumber(lastRow[key(idxCash)] ?? 0);
+        const deposits = toNumber(lastRow[key(idxMMF)] ?? 0);
+        const items = [];
+        if (cash > 0) items.push({ ticker: "CASH", name: "Cash", qty: 1, price: cash, value: cash, category: "Cash" });
+        if (deposits > 0) items.push({ ticker: "MMF+Deposits", name: "MMF & Deposits", qty: 1, price: deposits, value: deposits, category: "MMF & Deposits" });
+        setLowRiskItems(items);
+      } else {
+        setLowRiskItems([]);
+      }
+    } catch (e) {
+      console.warn("Low-risk item extraction failed:", e);
+      setLowRiskItems([]);
+    }
+  };
+
   // "האקסולידיית - גיליון מעקב ההוצאות של הסולידיית.xlsx"
   async function onFireExcelChosen(file: File) {
     setFireFileName(file.name)
@@ -375,7 +436,7 @@ const FinancialDashboard: React.FC = () => {
     const wb = XLSX.read(buf)
     const ws = wb.Sheets['מעקב שווי נקי'] ?? wb.Sheets[wb.SheetNames[0]]
     const df: Row[] = XLSX.utils.sheet_to_json(ws, { defval: null, header: 6 })
-
+    setRawNetWorthDF(df);
     // columns at positions [0, 11, 17]
     const rows = df.map((r: Row) => {
       const cols = Object.keys(r)
@@ -383,6 +444,7 @@ const FinancialDashboard: React.FC = () => {
         Month: r[cols[0]],
         'Total Liquid Assets': r[cols[11]],
         'Total Non-Liquid Assets': r[cols[17]],
+        'Total Debt': r[cols[30]]
       }
     })
 
@@ -391,11 +453,12 @@ const FinancialDashboard: React.FC = () => {
         Month: toDate(r.Month),
         'Total Liquid Assets': toNumber(r['Total Liquid Assets']),
         'Total Non-Liquid Assets': toNumber(r['Total Non-Liquid Assets']),
+        'Total Debt': toNumber(r['Total Debt']),
       }))
       .filter((r) => r.Month && !isNaN(+r.Month))
       .map((r) => ({
         ...r,
-        'Net Worth': (r['Total Liquid Assets'] ?? 0) + (r['Total Non-Liquid Assets'] ?? 0),
+        'Net Worth': (r['Total Liquid Assets'] ?? 0) + (r['Total Non-Liquid Assets'] ?? 0) + (r['Total Debt'] ?? 0),
       }))
       .sort((a, b) => +new Date(a.Month) - +new Date(b.Month))
 
@@ -440,6 +503,7 @@ const FinancialDashboard: React.FC = () => {
     setNetWorthDF(actual)
     setCombinedNetWorthDF([...actual, ...future])
     // ---- Low-risk buckets from latest row (position-based, aligned with your totals) ----
+    extractLowRiskItems(df); 
     try {
       // df is from: XLSX.utils.sheet_to_json(ws, { defval: null, header: 6 })
       // Positions (0-based) according to your sheet:
@@ -477,7 +541,7 @@ const FinancialDashboard: React.FC = () => {
 
         const items: Array<{ticker:string; name:string; qty:number; price:number; value:number; category:string}> = []
         if (cash > 0)     items.push({ ticker: "CASH",         name: "Cash",                 qty: 1, price: cash,     value: cash,     category: "Cash" })
-        if (deposits > 0) items.push({ ticker: "MMF+Deposits", name: "MMF & Deposits",       qty: 1, price: deposits, value: deposits, category: "Money Market & Deposits" })
+        if (deposits > 0) items.push({ ticker: "MMF+Deposits", name: "MMF & Deposits",       qty: 1, price: deposits, value: deposits, category: "MMF & Deposits" })
 
         setLowRiskItems(items)
       } else {
@@ -564,6 +628,7 @@ const FinancialDashboard: React.FC = () => {
       month: dayjs(r.Month).format('YYYY-MM'),
       liquidAssets: Math.round(r['Total Liquid Assets'] ?? 0),
       nonLiquidAssets: Math.round(r['Total Non-Liquid Assets'] ?? 0),
+      debt: Math.round(Math.abs(r['Total Debt'] ?? 0)),
       netWorth: Math.round(r['Net Worth'] ?? 0),
     }))
   }, [netWorthDF])
@@ -655,9 +720,135 @@ const FinancialDashboard: React.FC = () => {
       {label}
     </button>
   )
+  
 
   const haveFinance = incomeExpensesDF.length > 0 && expensesTime.length > 0
   const haveNetWorth = netWorthDF.length > 0
+
+  const handleExport = () => {
+    if (!haveFinance || !haveNetWorth) {
+      alert("Please load all data sources before exporting.");
+      return;
+    }
+
+    const dashboardState = {
+      version: 1.1,
+      exportedAt: new Date().toISOString(),
+      data: {
+        expensesTime,
+        incomeTime,
+        portfolio, // This includes any in-app edits
+        rawNetWorthDF,
+        financeFileName,
+        fireFileName,
+      }
+    };
+    const jsonString = JSON.stringify(dashboardState, null, 2); // Pretty print
+    const blob = new Blob([jsonString], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `financial_dashboard_state_${dayjs().format('YYYY-MM-DD')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const importedState = JSON.parse(text);
+
+      // Basic validation
+      if (!importedState.data || !importedState.data.expensesTime || !importedState.data.rawNetWorthDF) {
+      throw new Error("Invalid or outdated dashboard state file.");
+    }
+
+      // 1. Parse dates from JSON strings
+      const parseDates = (rows: any[], key: string) => 
+        rows.map(r => ({ ...r, [key]: new Date(r[key]) }));
+      const importedExpenses = parseDates(importedState.data.expensesTime, 'Month');
+      const importedIncome = parseDates(importedState.data.incomeTime, 'Month');
+      const importedRawNW = importedState.data.rawNetWorthDF;
+
+      // 2. Set all the core data states
+      setExpensesTime(importedExpenses);
+      setIncomeTime(importedIncome);
+      setPortfolio(importedState.data.portfolio);
+      setRawNetWorthDF(importedRawNW);
+      
+      // 3. RE-CALCULATE DERIVED FINANCE DATA (FIXES EMPTY SAVINGS TAB)
+      const sumBy = (arr: SeriesRow[]) => {
+        const map = new Map<number, number>();
+        for (const r of arr) {
+          const t = new Date(r.Month).setHours(0, 0, 0, 0);
+          map.set(t, (map.get(t) ?? 0) + (r.Amount ?? 0));
+        }
+        return [...map.entries()].map(([t, Amount]) => ({ Month: new Date(t), Amount }));
+      };
+
+      const total_expenses = sumBy(importedExpenses).map((r) => ({ Month: r.Month, 'Total Expenses': r.Amount }));
+      const total_income = sumBy(importedIncome).map((r) => ({ Month: r.Month, 'Total Income': r.Amount }));
+      const keyBy = (d: Date) => new Date(d).toISOString().slice(0, 10);
+      const merged = new Map<string, Partial<IncomeExpensesRow>>();
+      for (const r of total_income) merged.set(keyBy(r.Month), { Month: r.Month, ['Total Income']: r['Total Income'] as any });
+      for (const r of total_expenses) {
+        const k = keyBy(r.Month);
+        const prev = merged.get(k) ?? { Month: r.Month };
+        merged.set(k, { ...prev, ['Total Expenses']: r['Total Expenses'] as any });
+      }
+      const inc_exp: IncomeExpensesRow[] = [...merged.values()].filter(r => r['Total Income'] != null && r['Total Expenses'] != null && r.Month instanceof Date) as IncomeExpensesRow[];
+      const finalIncExp = inc_exp.map(r => {
+          const ti = Number(r['Total Income']);
+          const te = Number(r['Total Expenses']);
+          const Savings = ti - te;
+          return { Month: r.Month!, ['Total Income']: ti, ['Total Expenses']: te, Savings, ['Savings Rate']: (Savings / (ti || 1)) * 100 };
+      }).sort((a, b) => +a.Month - +b.Month);
+      setIncomeExpensesDF(finalIncExp); // <-- THIS IS THE CRITICAL FIX
+
+      // 4. RE-CALCULATE DERIVED NET WORTH DATA (Your useEffect will handle projections now)
+      type NetWorthRow = {
+        Month: Date;
+        'Total Liquid Assets': number;
+        'Total Non-Liquid Assets': number;
+        'Total Debt': number;
+        'Net Worth': number;
+      };
+      const net: NetWorthRow[] = importedRawNW
+        .map((r: any) => ({
+          Month: toDate(r[Object.keys(r)[0]]),
+          'Total Liquid Assets': toNumber(r[Object.keys(r)[11]]),
+          'Total Non-Liquid Assets': toNumber(r[Object.keys(r)[17]]),
+          'Total Debt': toNumber(r[Object.keys(r)[30]]),
+        }))
+        .filter((r: any) => r.Month && !isNaN(+r.Month))
+        .map((r: any) => ({
+          ...r,
+          'Net Worth': (r['Total Liquid Assets'] ?? 0) + (r['Total Non-Liquid Assets'] ?? 0) + (r['Total Debt'] ?? 0),
+        }))
+        .sort((a: any, b: any) => +new Date(a.Month) - +new Date(b.Month));
+      setNetWorthDF(net.map(r => ({ ...r, Type: 'Actual' })));
+
+      // 5. RE-EXTRACT LOW-RISK ITEMS (FIXES MISSING CASH/MMF)
+      extractLowRiskItems(importedRawNW);
+
+      // 6. Restore context
+      setFinanceFileName(importedState.data.financeFileName || 'Loaded from JSON');
+      setFireFileName(importedState.data.fireFileName || 'Loaded from JSON');
+      
+      e.target.value = '';
+      alert("Dashboard state imported successfully!");
+
+    } catch (err: any) {
+      alert(`Error importing file: ${err.message}`);
+    }
+  };
+  
+
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
@@ -705,10 +896,17 @@ const FinancialDashboard: React.FC = () => {
             />
           </label>
           {fireFileName && <span className="text-xs text-slate-300">Loaded: {fireFileName}</span>}
-
-          <div className="ml-auto text-xs text-slate-300">
+                    <div className="ml-auto text-xs text-slate-300">
             Files are processed locally in your browser; nothing is uploaded.
           </div>
+          <button onClick={handleExport} className="inline-flex items-center gap-2 rounded-lg bg-slate-700 px-3 py-2 hover:bg-slate-600 cursor-pointer">
+            Export Dashboard State
+          </button>
+          <label className="inline-flex items-center gap-2 rounded-lg bg-slate-700 px-3 py-2 hover:bg-slate-600 cursor-pointer">
+            Import Dashboard State
+            <input type="file" accept=".json" className="hidden" onChange={handleImport} />
+          </label>
+                    
         </div>
       </div>
 
@@ -908,17 +1106,39 @@ const FinancialDashboard: React.FC = () => {
             {!haveNetWorth ? (
               <div className="text-gray-400">Load the net worth workbook.</div>
             ) : (
+              // <ResponsiveContainer width="100%" height={500}>
+              //   <LineChart data={netWorthData}>
+              //     <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              //     <XAxis dataKey="month" stroke="#9CA3AF" />
+              //     <YAxis stroke="#9CA3AF" />
+              //     <Tooltip content={<CustomTooltip />} />
+              //     <Legend />
+              //     <Line type="monotone" dataKey="liquidAssets" stroke="#10B981" strokeWidth={2} name="Liquid Assets" />
+              //     <Line type="monotone" dataKey="nonLiquidAssets" stroke="#F59E0B" strokeWidth={2} name="Non-Liquid Assets" />
+              //     <Line type="monotone" dataKey="netWorth" stroke="#3B82F6" strokeWidth={3} name="Total Net Worth" />
+              //   </LineChart>
+              // </ResponsiveContainer>
               <ResponsiveContainer width="100%" height={500}>
-                <LineChart data={netWorthData}>
+                <AreaChart data={netWorthData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis dataKey="month" stroke="#9CA3AF" />
                   <YAxis stroke="#9CA3AF" />
                   <Tooltip content={<CustomTooltip />} />
                   <Legend />
-                  <Line type="monotone" dataKey="liquidAssets" stroke="#10B981" strokeWidth={2} name="Liquid Assets" />
-                  <Line type="monotone" dataKey="nonLiquidAssets" stroke="#F59E0B" strokeWidth={2} name="Non-Liquid Assets" />
+                  
+                  {/* Positive values */}
+                  <Area type="monotone" dataKey="liquidAssets" stackId="1" stroke="#10B981" fill="#10B981" name="Liquid Assets" />
+                  <Area type="monotone" dataKey="nonLiquidAssets" stackId="1" stroke="#F59E0B" fill="#F59E0B" name="Non-Liquid Assets" />
+                  
+                  {/* Negative values (Recharts doesn't natively stack below zero, so this shows it as a separate block) */}
+                  {/* For a true positive/negative stack, more complex charting logic would be needed */}
+                  {/* A simpler approach is to show debt as its own line or bar. Let's use a distinct line for clarity. */}
+                  <Line type="monotone" dataKey="debt" stroke="#EF4444" strokeWidth={2} name="Total Debt" />
+
+                  {/* The resulting Net Worth line */}
                   <Line type="monotone" dataKey="netWorth" stroke="#3B82F6" strokeWidth={3} name="Total Net Worth" />
-                </LineChart>
+
+                </AreaChart>
               </ResponsiveContainer>
             )}
           </div>
@@ -1117,6 +1337,13 @@ const FinancialDashboard: React.FC = () => {
                             <td className="py-2 pr-4 text-right">{fmtILS(v)}</td>
                             <td className="py-2 pr-0 text-right">{w.toFixed(2)}%</td>
                             <td className="py-2 pr-0 text-right">{catW.toFixed(2)}%</td>
+                            <td className="py-2 pr-4 text-right">
+                              <button 
+                                onClick={() => handleEditStock(p.ticker)} 
+                                className="text-blue-400 hover:text-blue-300 text-xs">
+                                Edit Qty
+                              </button>
+                            </td>
                           </tr>
                         )
                       })}
