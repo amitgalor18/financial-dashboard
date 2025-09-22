@@ -9,7 +9,8 @@ A local, private webapp to visualize my personal finances:
 Built with **React + Vite + Tailwind + Recharts**, data comes from my Excel workbooks and (optionally) a Google Sheets CSV.
 
 ---
-
+![Dashboard screenshot](/image.png)
+---
 ## 🚀 Running locally
 
 ### 1. Prerequisites
