@@ -1,10 +1,9 @@
-
 import React from 'react'
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend, BarChart, Bar
+  PieChart, Pie, Cell, Legend, BarChart, Bar, AreaChart, Area,
 } from 'recharts'
-import { TrendingUp, TrendingDown, DollarSign, BarChart3, Target, Wallet, Calculator, PieChart as PieIcon } from 'lucide-react'
+import { TrendingUp, DollarSign, BarChart3, Target, Wallet, Calculator, PieChart as PieIcon } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import dayjs from 'dayjs'
 import Papa from "papaparse"
@@ -29,7 +28,6 @@ interface IncomeExpensesRow {
 }
 
 const toNumber = (v: any) => (v == null || v === '' ? NaN : Number(v))
-const isFiniteNum = (x: any) => typeof x === 'number' && Number.isFinite(x)
 const toDate = (v: any): Date => {
   if (v instanceof Date) return v
   if (typeof v === 'number') {
@@ -37,17 +35,6 @@ const toDate = (v: any): Date => {
     return d ? new Date(d.y, d.m - 1, d.d) : new Date(NaN)
   }
   return new Date(v)
-}
-
-async function readSheetWithHeaderRow(file: File, sheetNameOrIndex: string | number, headerRow1Based: number): Promise<Row[]> {
-  const buf = await file.arrayBuffer()
-  const wb = XLSX.read(buf)
-  const ws =
-    typeof sheetNameOrIndex === 'number'
-      ? wb.Sheets[wb.SheetNames[sheetNameOrIndex]]
-      : wb.Sheets[sheetNameOrIndex] ?? wb.Sheets[wb.SheetNames[0]]
-  if (!ws) throw new Error('Sheet not found')
-  return XLSX.utils.sheet_to_json(ws, { defval: null, header: headerRow1Based })
 }
 
 async function fetchPortfolioCSV(csvUrl: string) {
@@ -66,18 +53,6 @@ async function fetchPortfolioCSV(csvUrl: string) {
   }))
 }
 
-// Helpers to pick columns by header text
-const normalize = (s: any) => String(s ?? "").replace(/[\s\u00A0]/g, "").toLowerCase()
-const findHeader = (headers: string[], patterns: string[]) => {
-  const H = headers.map(normalize)
-  for (const p of patterns.map(normalize)) {
-    const i = H.findIndex(h => h.includes(p))
-    if (i !== -1) return headers[i]
-  }
-  return null
-}
-const num = (v: any) => Number(String(v ?? "").replace(/[^\d.\-]/g, "")) || 0
-
 /** ---------- React Component ---------- */
 const FinancialDashboard: React.FC = () => {
   // ⬇️ ALL hooks must be inside this function ⬇️
@@ -85,9 +60,8 @@ const FinancialDashboard: React.FC = () => {
   const [incomeTime, setIncomeTime] = React.useState<SeriesRow[]>([])
   const [incomeExpensesDF, setIncomeExpensesDF] = React.useState<IncomeExpensesRow[]>([])
   const [netWorthDF, setNetWorthDF] = React.useState<Row[]>([])
-  const [combinedNetWorthDF, setCombinedNetWorthDF] = React.useState<Row[]>([])
   const [fiProgressDF, setFiProgressDF] = React.useState<Row[]>([])
-
+  const [rawNetWorthDF, setRawNetWorthDF] = React.useState<Row[]>([]);
   const [activeTab, setActiveTab] = React.useState<'overview' | 'expenses' | 'savings' | 'networth' | 'portfolio' | 'fire'>('overview')
   const [selectedMonth, setSelectedMonth] = React.useState<string>('')
 
@@ -96,15 +70,41 @@ const FinancialDashboard: React.FC = () => {
 
   const [csvUrl, setCsvUrl] = React.useState<string>("")
   const [portfolio, setPortfolio] = React.useState<Array<{ticker:string; name:string; qty:number; price:number; value:number, category:string}>>([])
-  const [totalValue, setTotalValue] = React.useState<number>(0)
+  // const [totalValue, setTotalValue] = React.useState<number>(0) // CLEANUP: This state was replaced by combinedTotal
   const [loadingPortfolio, setLoadingPortfolio] = React.useState<boolean>(false)
   const [portfolioError, setPortfolioError] = React.useState<string | null>(null)
+  const [apiKey, setApiKey] = React.useState<string>('');
+  const [loadingPrices, setLoadingPrices] = React.useState<boolean>(false);
+  const [tickerChanges, setTickerChanges] = React.useState<Array<{original: string, normalized: string}>>([]);
+  const [unmappedTickers, setUnmappedTickers] = React.useState<string[]>([]);
+
   const fmtILS = (n: number) => `₪${Math.round(n).toLocaleString()}`
   const [financeStats, setFinanceStats] = React.useState<{months: number; expRows: number; incRows: number}>({
     months: 0, expRows: 0, incRows: 0
   })
+  // Helper function to convert any ticker variation into a single, consistent key.
+  // e.g., "IS-FF301.TA", "is.ff301" all become "ISFF301"
+  const normalizeTicker = (ticker: string) => {
+    return ticker
+      .toUpperCase()
+      .replace('.TA', '')
+      .replace('.', '')
+      .replace('-', '');
+  };
+  // Maps your spreadsheet tickers (keys) to the correct API tickers (values). Find the correct ticker in eod using: https://eodhd.com/exchange/TA
+  const tickerApiMap: Record<string, string> = {
+    'ISFF301': 'iSFF301.TA',
+    'ISFF702': 'ISFF702.TA',
+    'ISFF101': 'iSFF101.TA',
+    'ISFF701': 'IS-FF701.TA',
+    'ISFF505': 'IS-FF505.TA',
+    'BTC': 'BTC-USD',
+    'NVDA': 'NVDA',
+    'ILS=X': 'ILS=X',
+  };
+  
   // Optional: per-ticker category map (used only when CSV has no Category column)
-  const [categoryMap, setCategoryMap] = React.useState<Record<string,string>>({
+  const [categoryMap] = React.useState<Record<string,string>>({ // CLEANUP: Removed setCategoryMap as it wasn't used
     // examples—you can extend/edit:
     "IS-FF301.TA": "Stocks",
     "IS.FF301": "Stocks",      // your Google Sheets symbol for the same ETF
@@ -112,7 +112,18 @@ const FinancialDashboard: React.FC = () => {
   })
 
   /** ---------- Handlers for file inputs ---------- */
-  // "טבלת-הוצאות-והכנסות-חתול-פיננסי-הגרסה-המלאה.xlsx"
+  React.useEffect(() => {
+    const savedKey = localStorage.getItem('finnhubApiKey');
+    if (savedKey) {
+      setApiKey(savedKey);
+    }
+  }, []);
+  const handleApiKeyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newKey = e.target.value;
+    setApiKey(newKey);
+    localStorage.setItem('finnhubApiKey', newKey);
+  };
+  
   async function onFinanceExcelChosen(file: File) {
     setFinanceFileName(file.name)
 
@@ -124,14 +135,12 @@ const FinancialDashboard: React.FC = () => {
       return
     }
 
-    // Read raw rows (2D array)
     const A: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null })
 
-    // Find header row by looking for the three static Hebrew columns
     const STATIC = ['קטגוריה ראשית', 'תת-קטגוריה', 'הוצאות']
     let headerRowIdx = -1
     let colIdx: Record<string, number> = {}
-    for (let r = 0; r < Math.min(A.length, 30); r++) { // search first ~30 rows
+    for (let r = 0; r < Math.min(A.length, 30); r++) { 
       const row = A[r] || []
       const hits: Record<string, number> = {}
       for (let c = 0; c < row.length; c++) {
@@ -145,34 +154,28 @@ const FinancialDashboard: React.FC = () => {
       }
     }
     if (headerRowIdx === -1) {
-      // couldn't find header row → show 0/0/0
       setFinanceStats({ months: 0, expRows: 0, incRows: 0 })
       return
     }
 
-    // Build header names array
     const headers = A[headerRowIdx].map((v) => (v === null ? '' : String(v)))
     const idxMain = colIdx['קטגוריה ראשית']
     const idxSub = colIdx['תת-קטגוריה']
     const idxHotsaot = colIdx['הוצאות']
 
-    // Month columns are everything except the 3 static ones, from the next row onward
     const monthColIdxs: number[] = []
     for (let c = 0; c < headers.length; c++) {
       if (c !== idxMain && c !== idxSub && c !== idxHotsaot) monthColIdxs.push(c)
     }
 
-    // Normalize month headers → Date (Excel serial / Date / string)
     const monthKeys = monthColIdxs
       .map((c) => {
         const k = headers[c]
-        // numeric? (Excel serial often appears as number in header row, but since headers[] are strings, parse)
         const asNum = Number(k)
         if (Number.isFinite(asNum) && asNum > 20000 && asNum < 60000) {
           const d = XLSX.SSF.parse_date_code(asNum)
           if (d) return { col: c, d: new Date(d.y, d.m - 1, d.d) }
         }
-        // try parse as date string
         const d2 = new Date(k)
         if (!isNaN(+d2)) return { col: c, d: d2 }
         return null
@@ -180,7 +183,6 @@ const FinancialDashboard: React.FC = () => {
       .filter(Boolean) as { col: number; d: Date }[]
 
     if (monthKeys.length === 0) {
-      // fallback: sometimes the header row holds empty month cells, and the next row has dates—try the next row
       const next = A[headerRowIdx + 1] || []
       for (const c of monthColIdxs) {
         const v = next[c]
@@ -195,12 +197,8 @@ const FinancialDashboard: React.FC = () => {
       }
     }
 
-    // Rows start after headerRowIdx
     const dataRows = A.slice(headerRowIdx + 1)
 
-    // Split rows similar to your Python iloc windows:
-    // If your sheet always has expenses first and then income immediately after, keep 0..56, 57..67.
-    // If not, we can detect income block by looking at the 'הוצאות' column value; for now stick to original split:
     const EXPENSES_CUTOFF = 57
     const INCOME_CUTOFF = 68
 
@@ -209,7 +207,6 @@ const FinancialDashboard: React.FC = () => {
 
     const toCell = (row: any[], i: number) => (i >= 0 && i < row.length ? row[i] : null)
 
-    // Melt expenses
     const eTime: SeriesRow[] = []
     for (const row of expenses_df) {
       const main = toCell(row, idxMain)
@@ -229,7 +226,6 @@ const FinancialDashboard: React.FC = () => {
       }
     }
 
-    // Melt income
     const iTime: SeriesRow[] = []
     for (const row of income_df) {
       const main = toCell(row, idxMain)
@@ -249,7 +245,6 @@ const FinancialDashboard: React.FC = () => {
       }
     }
 
-    // Group sums by Month
     const sumBy = (arr: SeriesRow[]) => {
       const map = new Map<number, number>()
       for (const r of arr) {
@@ -262,7 +257,6 @@ const FinancialDashboard: React.FC = () => {
     const total_expenses = sumBy(eTime).map((r) => ({ Month: r.Month, 'Total Expenses': r.Amount }))
     const total_income = sumBy(iTime).map((r) => ({ Month: r.Month, 'Total Income': r.Amount }))
 
-    // Merge on Month
     const keyBy = (d: Date) => new Date(d).toISOString().slice(0, 10)
     const merged = new Map<string, Partial<IncomeExpensesRow>>()
     for (const r of total_income) merged.set(keyBy(r.Month), { Month: r.Month, ['Total Income']: r['Total Income'] as any })
@@ -295,7 +289,6 @@ const FinancialDashboard: React.FC = () => {
     setIncomeExpensesDF(finalIncExp)
     setFinanceStats({ months: monthKeys.length, expRows: eTime.length, incRows: iTime.length })
 
-    // Default month → last month with data
     if (finalIncExp.length) {
       const last = finalIncExp.at(-1)!.Month
       const ym = `${last.getFullYear()}-${String(last.getMonth() + 1).padStart(2, '0')}`
@@ -303,42 +296,40 @@ const FinancialDashboard: React.FC = () => {
     }
   }
 
-  async function loadFromSheet() {
-    const rows = await fetchPortfolioCSV("https://docs.google.com/spreadsheets/d/e/2PACX-1vSltL3NxXUBQLwhaHW8Gist2I6qVRt8p3fPILBbEEXzcplzFMu8j0-K2JCJgj7hrTcoxCq-JUJN2v6j/pub?output=csv")
-    setPortfolio(rows)
-    setTotalValue(rows.reduce((a,b) => a + (b.value || b.qty*b.price || 0), 0))
-  }
+  // CLEANUP: This function was for a hardcoded URL. The new `loadFromSheetClick` is the primary one.
+  // It can be removed or kept for testing. I'll comment it out.
+  // async function loadFromSheet() {
+  //   const rows = await fetchPortfolioCSV("https://docs.google.com/spreadsheets/d/e/2PACX-1vSltL3NxXUBQLwhaHW8Gist2I6qVRt8p3fPILBbEEXzcplzFMu8j0-K2JCJgj7hrTcoxCq-JUJN2v6j/pub?output=csv")
+  //   setPortfolio(rows)
+  //   // setTotalValue(rows.reduce((a,b) => a + (b.value || b.qty*b.price || 0), 0))
+  // }
 
   async function loadFromSheetClick() {
     try {
       setPortfolioError(null)
       setLoadingPortfolio(true)
       const rows = await fetchPortfolioCSV(csvUrl)
-      // normalize rows; accept alternative header capitalizations
       const norm = rows.map((r: any) => {
         const ticker = r.Ticker ?? r.ticker ?? ""
         const qty    = Number(r.Qty   ?? r.qty   ?? 0)
         const price  = Number(r.Price ?? r.price ?? 0)
         const value  = Number(r.Value ?? r.value ?? 0) || (qty * price)
         const name   = r.Name ?? r.name ?? ticker
-        // prefer CSV's Category; else fallback to mapping by ticker (or name)
         const category = (r.Category ?? r.category) || categoryMap[ticker] || "Uncategorized"
         return { ticker, name, qty, price, value, category }
       })
       setPortfolio(norm)
-      setTotalValue(norm.reduce((a,b)=> a + (b.value || 0), 0))
+      // setTotalValue(norm.reduce((a,b)=> a + (b.value || 0), 0)) // CLEANUP: No longer needed
     } catch (e: any) {
       setPortfolioError(e?.message || String(e))
     } finally {
       setLoadingPortfolio(false)
     }
   }
-  // Portfolio data
+  
   const [includeLowRisk, setIncludeLowRisk] = React.useState<boolean>(true)
-  // This will later combine CSV holdings + (optional) low-risk items from the Excel file
   const [lowRiskItems, setLowRiskItems] = React.useState<Array<{ticker:string; name:string; qty:number; price:number; value:number; category:string}>>([])
   const combinedPortfolio = React.useMemo(() => {
-    // lowRiskItems will come from #2; define it above (starts empty):
     const base = portfolio ?? []
     return includeLowRisk ? [...base, ...lowRiskItems] : base
   }, [portfolio, lowRiskItems, includeLowRisk])
@@ -347,7 +338,7 @@ const FinancialDashboard: React.FC = () => {
     () => combinedPortfolio.reduce((a,b)=> a + (b.value || b.qty*b.price || 0), 0),
     [combinedPortfolio]
   )
-
+  
   const categoryAgg = React.useMemo(() => {
     const m = new Map<string, number>()
     for (const p of combinedPortfolio) {
@@ -359,30 +350,91 @@ const FinancialDashboard: React.FC = () => {
       .map(([category, value]) => ({ category, value, weight: combinedTotal ? (value/combinedTotal)*100 : 0 }))
       .sort((a,b)=> b.value - a.value)
   }, [combinedPortfolio, combinedTotal])
-  // Pie data
+
   const pieData = React.useMemo(() => {
     return combinedPortfolio
       .filter(p => (p.value || (p.qty*p.price)) > 0)
       .map(p => ({ name: p.name || p.ticker, value: p.value || (p.qty * p.price) }))
   }, [combinedPortfolio])
 
-  // "האקסולידיית - גיליון מעקב ההוצאות של הסולידיית.xlsx"
+  const handleEditStock = (ticker: string) => {
+    const stock = portfolio.find(p => p.ticker === ticker);
+    if (!stock) return;
+
+    const newQtyStr = prompt(`Enter new quantity for ${ticker}:`, String(stock.qty));
+    if (newQtyStr === null) return;
+
+    const newQty = Number(newQtyStr);
+    if (!isNaN(newQty) && newQty >= 0) {
+      setPortfolio(prevPortfolio => 
+        prevPortfolio.map(p => 
+          p.ticker === ticker 
+            ? { ...p, qty: newQty, value: newQty * p.price }
+            : p
+        )
+      );
+    } else {
+      alert("Invalid quantity entered.");
+    }
+  };
+
+  const extractLowRiskItems = (fullNetWorthData: Row[]) => {
+    try {
+      if (!fullNetWorthData || fullNetWorthData.length === 0) {
+        setLowRiskItems([]);
+        return;
+      }
+      const headers = Object.keys(fullNetWorthData[0] ?? {});
+      const idxMonth = 0;
+      const idxCash = 1;
+      const idxMMF = 2;
+      // CLEANUP: These idx variables were declared but not used in this specific function.
+      // They are used for context/understanding the sheet layout. Can be removed for cleaner code.
+      // const idxBonds = 3;
+      // const idxStocks = 4;
+      // const idxHishtalmut = 5;
+      // const idxProvFund = 6;
+      // const idxRealEstate = 7;
+      // const idxCrypto = 10;
+      const key = (i: number) => headers[i];
+
+      const lastRow = [...fullNetWorthData].reverse().find((r: any) => {
+        const d = toDate(r[key(idxMonth)]);
+        return d instanceof Date && !isNaN(+d);
+      });
+
+      if (lastRow) {
+        const cash = toNumber(lastRow[key(idxCash)] ?? 0);
+        const deposits = toNumber(lastRow[key(idxMMF)] ?? 0);
+        const items = [];
+        if (cash > 0) items.push({ ticker: "CASH", name: "Cash", qty: 1, price: cash, value: cash, category: "Cash" });
+        if (deposits > 0) items.push({ ticker: "MMF+Deposits", name: "MMF & Deposits", qty: 1, price: deposits, value: deposits, category: "MMF & Deposits" });
+        setLowRiskItems(items);
+      } else {
+        setLowRiskItems([]);
+      }
+    } catch (e) {
+      console.warn("Low-risk item extraction failed:", e);
+      setLowRiskItems([]);
+    }
+  };
+
   async function onFireExcelChosen(file: File) {
     setFireFileName(file.name)
     
-    // header row was 5 (0-based) in pandas => 6 (1-based)
     const buf = await file.arrayBuffer()
     const wb = XLSX.read(buf)
     const ws = wb.Sheets['מעקב שווי נקי'] ?? wb.Sheets[wb.SheetNames[0]]
     const df: Row[] = XLSX.utils.sheet_to_json(ws, { defval: null, header: 6 })
+    setRawNetWorthDF(df);
 
-    // columns at positions [0, 11, 17]
     const rows = df.map((r: Row) => {
       const cols = Object.keys(r)
       return {
         Month: r[cols[0]],
         'Total Liquid Assets': r[cols[11]],
         'Total Non-Liquid Assets': r[cols[17]],
+        'Total Debt': r[cols[30]]
       }
     })
 
@@ -391,11 +443,12 @@ const FinancialDashboard: React.FC = () => {
         Month: toDate(r.Month),
         'Total Liquid Assets': toNumber(r['Total Liquid Assets']),
         'Total Non-Liquid Assets': toNumber(r['Total Non-Liquid Assets']),
+        'Total Debt': toNumber(r['Total Debt']),
       }))
       .filter((r) => r.Month && !isNaN(+r.Month))
       .map((r) => ({
         ...r,
-        'Net Worth': (r['Total Liquid Assets'] ?? 0) + (r['Total Non-Liquid Assets'] ?? 0),
+        'Net Worth': (r['Total Liquid Assets'] ?? 0) + (r['Total Non-Liquid Assets'] ?? 0) + (r['Total Debt'] ?? 0),
       }))
       .sort((a, b) => +new Date(a.Month) - +new Date(b.Month))
 
@@ -438,55 +491,11 @@ const FinancialDashboard: React.FC = () => {
 
     const actual = net.map((r) => ({ ...r, Type: 'Actual' }))
     setNetWorthDF(actual)
-    setCombinedNetWorthDF([...actual, ...future])
-    // ---- Low-risk buckets from latest row (position-based, aligned with your totals) ----
-    try {
-      // df is from: XLSX.utils.sheet_to_json(ws, { defval: null, header: 6 })
-      // Positions (0-based) according to your sheet:
-      // 0 = Month
-      // 1 = Cash (מזומן)
-      // 2 = פקדונות, תכניות חיסכון, מק"מ וקרנות כספיות (MMF & Deposits)
-      // 4 = מניות (Stocks)   -- we will NOT add this (to avoid double counting with CSV)
-      // 10 = קריפטו (Crypto) -- we will NOT add this (to avoid double counting with CSV)
-      // 11 = Total Liquid Assets
-      // 17 = Total Non-Liquid Assets
-
-      const headers = Object.keys(df[0] ?? {})
-      // Optional sanity check:
-      // console.log('Net Worth headers (by index):', headers.map((h, i) => `${i}:${h}`))
-
-      const idxMonth   = 0
-      const idxCash    = 1
-      const idxMMF     = 2
-      // const idxStocks  = 4   // not used here to avoid double count
-      // const idxCrypto  = 10  // not used here to avoid double count
-      // const idxLiquid  = 11  // (you already use these in your totals)
-      // const idxNonLiq  = 17
-
-      const key = (i: number) => headers[i]
-
-      // pick the last row with a valid Month
-      const lastRow = [...df].reverse().find((r: any) => {
-        const d = toDate(r[key(idxMonth)])
-        return d instanceof Date && !isNaN(+d)
-      })
-
-      if (lastRow) {
-        const cash     = toNumber(lastRow[key(idxCash)] ?? 0)
-        const deposits = toNumber(lastRow[key(idxMMF)]  ?? 0)
-
-        const items: Array<{ticker:string; name:string; qty:number; price:number; value:number; category:string}> = []
-        if (cash > 0)     items.push({ ticker: "CASH",         name: "Cash",                 qty: 1, price: cash,     value: cash,     category: "Cash" })
-        if (deposits > 0) items.push({ ticker: "MMF+Deposits", name: "MMF & Deposits",       qty: 1, price: deposits, value: deposits, category: "Money Market & Deposits" })
-
-        setLowRiskItems(items)
-      } else {
-        setLowRiskItems([])
-      }
-    } catch (e) {
-      console.warn("Low-risk (position-based) extraction failed:", e)
-      setLowRiskItems([])
-    }
+    // setCombinedNetWorthDF([...actual, ...future]) // CLEANUP: This state was declared but not used.
+    
+    extractLowRiskItems(df); 
+    // CLEANUP: The logic block below was a duplicate of what's already in the `extractLowRiskItems` helper function.
+    // It has been removed to avoid redundant code.
   }
 
   /** ---------- Compute FI when both datasets are present ---------- */
@@ -502,7 +511,6 @@ const FinancialDashboard: React.FC = () => {
     }
     rows.sort((a, b) => +new Date(a.Month) - +new Date(b.Month))
 
-    // rolling 12-month Annual Expenses
     const acc: number[] = []
     const res = rows.map((r, i) => {
       const te = r['Total Expenses'] ?? 0
@@ -516,7 +524,6 @@ const FinancialDashboard: React.FC = () => {
 
   /** ---------- Derived datasets for charts ---------- */
   const monthlyData = React.useMemo(() => {
-    // [{Month, Total Income, Total Expenses, Savings, Savings Rate}]
     return incomeExpensesDF.map((r) => ({
       month: dayjs(r.Month).format('YYYY-MM'),
       income: Math.round(r['Total Income'] ?? 0),
@@ -526,7 +533,6 @@ const FinancialDashboard: React.FC = () => {
     }))
   }, [incomeExpensesDF])
 
-  // Expenses breakdown for selected month by 'הוצאות'
   const expensesData = React.useMemo(() => {
     if (!selectedMonth) return []
     const m = selectedMonth
@@ -540,7 +546,6 @@ const FinancialDashboard: React.FC = () => {
     return [...byCat.entries()].map(([category, amount], i) => ({ category, amount, color: palette[i % palette.length] }))
   }, [expensesTime, selectedMonth])
 
-  // Savings over time
   const savingsSeries = React.useMemo(() => {
     if (!incomeExpensesDF.length) return []
     const rows = incomeExpensesDF
@@ -558,12 +563,12 @@ const FinancialDashboard: React.FC = () => {
     ? Math.round(savingsSeries.reduce((a, b) => a + b.savings, 0) / savingsSeries.length)
     : 0
   
-
   const netWorthData = React.useMemo(() => {
     return netWorthDF.map((r) => ({
       month: dayjs(r.Month).format('YYYY-MM'),
       liquidAssets: Math.round(r['Total Liquid Assets'] ?? 0),
       nonLiquidAssets: Math.round(r['Total Non-Liquid Assets'] ?? 0),
+      debt: Math.round(Math.abs(r['Total Debt'] ?? 0)),
       netWorth: Math.round(r['Net Worth'] ?? 0),
     }))
   }, [netWorthDF])
@@ -576,19 +581,110 @@ const FinancialDashboard: React.FC = () => {
     }))
   }, [fiProgressDF])
 
+  const fetchLivePrices = async () => {
+      if (!apiKey) {
+        alert("Please enter your EODHD API key.");
+        return;
+      }
+      if (portfolio.length === 0) return;
+
+      setLoadingPrices(true);
+      setPortfolioError(null);
+      setTickerChanges([]);
+      setUnmappedTickers([]);
+
+      try {
+          const allOriginalTickers = [...new Set([...portfolio.map(p => p.ticker), 'ILS=X'])];
+          
+          const tickersToFetch: string[] = [];
+          const localUnmapped: string[] = [];
+          const reverseApiMap: Record<string, string> = {};
+
+          allOriginalTickers.forEach(originalTicker => {
+              const normalized = normalizeTicker(originalTicker);
+              const apiTicker = tickerApiMap[normalized];
+              
+              if (apiTicker) {
+                  tickersToFetch.push(apiTicker);
+                  reverseApiMap[apiTicker] = originalTicker;
+              } else {
+                  localUnmapped.push(originalTicker);
+              }
+          });
+
+          setUnmappedTickers(localUnmapped);
+
+          if (tickersToFetch.length === 0) {
+            throw new Error("No mappable tickers found in portfolio.");
+          }
+
+          const promises = tickersToFetch.map(apiTicker => {
+              let symbolForApi = apiTicker;
+              if (apiTicker === 'ILS=X') {
+                  symbolForApi = `USDILS.FOREX`;
+              } else if (apiTicker.endsWith('-USD')) {
+                  symbolForApi = `${apiTicker}.CC`;
+              }
+              
+              const endpoint = `https://financial-dashboard-19e9ldq4f-amitgalor18-2075s-projects.vercel.app/api/get-prices?ticker=${symbolForApi}&apiKey=${apiKey}`;
+              return fetch(endpoint).then(res => res.json());
+          });
+
+          const results = await Promise.all(promises);
+
+          const priceMap: Record<string, number> = {};
+          const errors: string[] = [];
+
+          results.forEach((result, index) => {
+              const apiTicker = tickersToFetch[index];
+              const originalTicker = reverseApiMap[apiTicker];
+
+              if (result.price && originalTicker) {
+                  priceMap[originalTicker] = result.price;
+              } else {
+                  errors.push(`Failed: ${originalTicker || apiTicker} (${result.error || 'Unknown'})`);
+              }
+          });
+
+          if (errors.length > 0) console.error("Tickers that failed:", errors);
+          const usdToIlsRate = priceMap['ILS=X'];
+          if (!usdToIlsRate) throw new Error("Crucial data missing: Could not get USD/ILS exchange rate.");
+
+          const updatedPortfolio = portfolio.map(asset => {
+              const livePrice = priceMap[asset.ticker];
+              if (livePrice === undefined) return asset;
+
+              let finalPriceInILS: number;
+              const apiTicker = tickerApiMap[normalizeTicker(asset.ticker)] || asset.ticker;
+              
+              if (apiTicker.toUpperCase().endsWith('.TA')) {
+                  finalPriceInILS = livePrice / 100;
+              } else if (apiTicker.toUpperCase().endsWith('-USD')) {
+                  finalPriceInILS = livePrice * usdToIlsRate;
+              } else { 
+                  finalPriceInILS = livePrice * usdToIlsRate;
+              }
+              
+              return { ...asset, price: finalPriceInILS, value: asset.qty * finalPriceInILS };
+          });
+
+          setPortfolio(updatedPortfolio);
+          alert(errors.length > 0 ? "Portfolio prices refreshed, but some tickers failed. Check console." : "Portfolio prices refreshed successfully!");
+
+      } catch (err: any) {
+          setPortfolioError(err.message || "An unknown error occurred.");
+      } finally {
+          setLoadingPrices(false);
+      }
+  };
+
   /** ---------- UI bits ---------- */
-  const StatCard = ({ title, value, change, icon: Icon, trend }: any) => (
+  const StatCard = ({ title, value, icon: Icon }: any) => (
     <div className="bg-gray-800 rounded-xl p-6 border border-gray-700 hover:border-gray-600 transition-all duration-300 hover:transform hover:scale-105">
       <div className="flex items-center justify-between">
         <div>
           <p className="text-gray-400 text-sm font-medium">{title}</p>
           <p className="text-2xl font-bold text-white mt-1">{value}</p>
-          {change && (
-            <div className={`flex items-center mt-2 ${trend === 'up' ? 'text-green-400' : 'text-red-400'}`}>
-              {trend === 'up' ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
-              <span className="ml-1 text-sm font-medium">{change}</span>
-            </div>
-          )}
         </div>
         <div className="bg-blue-500 bg-opacity-20 p-3 rounded-lg">
           <Icon className="text-blue-400" size={24} />
@@ -655,10 +751,126 @@ const FinancialDashboard: React.FC = () => {
       {label}
     </button>
   )
-
+  
   const haveFinance = incomeExpensesDF.length > 0 && expensesTime.length > 0
   const haveNetWorth = netWorthDF.length > 0
 
+  const handleExport = () => {
+    if (!haveFinance || !haveNetWorth) {
+      alert("Please load all data sources before exporting.");
+      return;
+    }
+
+    const dashboardState = {
+      version: 1.1,
+      exportedAt: new Date().toISOString(),
+      data: {
+        expensesTime,
+        incomeTime,
+        portfolio,
+        rawNetWorthDF,
+        financeFileName,
+        fireFileName,
+      }
+    };
+    const jsonString = JSON.stringify(dashboardState, null, 2);
+    const blob = new Blob([jsonString], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `financial_dashboard_state_${dayjs().format('YYYY-MM-DD')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const importedState = JSON.parse(text);
+
+      if (!importedState.data || !importedState.data.expensesTime || !importedState.data.rawNetWorthDF) {
+      throw new Error("Invalid or outdated dashboard state file.");
+    }
+
+      const parseDates = (rows: any[], key: string) => 
+        rows.map(r => ({ ...r, [key]: new Date(r[key]) }));
+      const importedExpenses = parseDates(importedState.data.expensesTime, 'Month');
+      const importedIncome = parseDates(importedState.data.incomeTime, 'Month');
+      const importedRawNW = importedState.data.rawNetWorthDF;
+
+      setExpensesTime(importedExpenses);
+      setIncomeTime(importedIncome);
+      setPortfolio(importedState.data.portfolio);
+      setRawNetWorthDF(importedRawNW);
+      
+      const sumBy = (arr: SeriesRow[]) => {
+        const map = new Map<number, number>();
+        for (const r of arr) {
+          const t = new Date(r.Month).setHours(0, 0, 0, 0);
+          map.set(t, (map.get(t) ?? 0) + (r.Amount ?? 0));
+        }
+        return [...map.entries()].map(([t, Amount]) => ({ Month: new Date(t), Amount }));
+      };
+
+      const total_expenses = sumBy(importedExpenses).map((r) => ({ Month: r.Month, 'Total Expenses': r.Amount }));
+      const total_income = sumBy(importedIncome).map((r) => ({ Month: r.Month, 'Total Income': r.Amount }));
+      const keyBy = (d: Date) => new Date(d).toISOString().slice(0, 10);
+      const merged = new Map<string, Partial<IncomeExpensesRow>>();
+      for (const r of total_income) merged.set(keyBy(r.Month), { Month: r.Month, ['Total Income']: r['Total Income'] as any });
+      for (const r of total_expenses) {
+        const k = keyBy(r.Month);
+        const prev = merged.get(k) ?? { Month: r.Month };
+        merged.set(k, { ...prev, ['Total Expenses']: r['Total Expenses'] as any });
+      }
+      const inc_exp: IncomeExpensesRow[] = [...merged.values()].filter(r => r['Total Income'] != null && r['Total Expenses'] != null && r.Month instanceof Date) as IncomeExpensesRow[];
+      const finalIncExp = inc_exp.map(r => {
+          const ti = Number(r['Total Income']);
+          const te = Number(r['Total Expenses']);
+          const Savings = ti - te;
+          return { Month: r.Month!, ['Total Income']: ti, ['Total Expenses']: te, Savings, ['Savings Rate']: (Savings / (ti || 1)) * 100 };
+      }).sort((a, b) => +a.Month - +b.Month);
+      setIncomeExpensesDF(finalIncExp);
+
+      type NetWorthRow = {
+        Month: Date;
+        'Total Liquid Assets': number;
+        'Total Non-Liquid Assets': number;
+        'Total Debt': number;
+        'Net Worth': number;
+      };
+      const net: NetWorthRow[] = importedRawNW
+        .map((r: any) => ({
+          Month: toDate(r[Object.keys(r)[0]]),
+          'Total Liquid Assets': toNumber(r[Object.keys(r)[11]]),
+          'Total Non-Liquid Assets': toNumber(r[Object.keys(r)[17]]),
+          'Total Debt': toNumber(r[Object.keys(r)[30]]),
+        }))
+        .filter((r: any) => r.Month && !isNaN(+r.Month))
+        .map((r: any) => ({
+          ...r,
+          'Net Worth': (r['Total Liquid Assets'] ?? 0) + (r['Total Non-Liquid Assets'] ?? 0) + (r['Total Debt'] ?? 0),
+        }))
+        .sort((a: any, b: any) => +new Date(a.Month) - +new Date(b.Month));
+      setNetWorthDF(net.map(r => ({ ...r, Type: 'Actual' })));
+
+      extractLowRiskItems(importedRawNW);
+
+      setFinanceFileName(importedState.data.financeFileName || 'Loaded from JSON');
+      setFireFileName(importedState.data.fireFileName || 'Loaded from JSON');
+      
+      e.target.value = '';
+      alert("Dashboard state imported successfully!");
+
+    } catch (err: any) {
+      alert(`Error importing file: ${err.message}`);
+    }
+  };
+  
   return (
     <div className="min-h-screen bg-gray-900 text-white">
       {/* Header */}
@@ -705,10 +917,17 @@ const FinancialDashboard: React.FC = () => {
             />
           </label>
           {fireFileName && <span className="text-xs text-slate-300">Loaded: {fireFileName}</span>}
-
-          <div className="ml-auto text-xs text-slate-300">
+                    <div className="ml-auto text-xs text-slate-300">
             Files are processed locally in your browser; nothing is uploaded.
           </div>
+          <button onClick={handleExport} className="inline-flex items-center gap-2 rounded-lg bg-slate-700 px-3 py-2 hover:bg-slate-600 cursor-pointer">
+            Export Dashboard State
+          </button>
+          <label className="inline-flex items-center gap-2 rounded-lg bg-slate-700 px-3 py-2 hover:bg-slate-600 cursor-pointer">
+            Import Dashboard State
+            <input type="file" accept=".json" className="hidden" onChange={handleImport} />
+          </label>
+                    
         </div>
       </div>
 
@@ -851,7 +1070,6 @@ const FinancialDashboard: React.FC = () => {
               </div>
             ) : (
               <>
-                {/* Top stats (optional; remove if you prefer) */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
                     <h3 className="text-xl font-bold mb-2">Cumulative Savings to Date</h3>
@@ -869,7 +1087,6 @@ const FinancialDashboard: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Cumulative Savings (line) */}
                 <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
                   <h3 className="text-xl font-bold mb-4">Cumulative Savings (₪)</h3>
                   <ResponsiveContainer width="100%" height={340}>
@@ -883,7 +1100,6 @@ const FinancialDashboard: React.FC = () => {
                   </ResponsiveContainer>
                 </div>
 
-                {/* Monthly Savings (bar) */}
                 <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
                   <h3 className="text-xl font-bold mb-4">Monthly Savings (₪)</h3>
                   <ResponsiveContainer width="100%" height={300}>
@@ -909,16 +1125,17 @@ const FinancialDashboard: React.FC = () => {
               <div className="text-gray-400">Load the net worth workbook.</div>
             ) : (
               <ResponsiveContainer width="100%" height={500}>
-                <LineChart data={netWorthData}>
+                <AreaChart data={netWorthData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis dataKey="month" stroke="#9CA3AF" />
                   <YAxis stroke="#9CA3AF" />
                   <Tooltip content={<CustomTooltip />} />
                   <Legend />
-                  <Line type="monotone" dataKey="liquidAssets" stroke="#10B981" strokeWidth={2} name="Liquid Assets" />
-                  <Line type="monotone" dataKey="nonLiquidAssets" stroke="#F59E0B" strokeWidth={2} name="Non-Liquid Assets" />
+                  <Area type="monotone" dataKey="liquidAssets" stackId="1" stroke="#10B981" fill="#10B981" name="Liquid Assets" />
+                  <Area type="monotone" dataKey="nonLiquidAssets" stackId="1" stroke="#F59E0B" fill="#F59E0B" name="Non-Liquid Assets" />
+                  <Line type="monotone" dataKey="debt" stroke="#EF4444" strokeWidth={2} name="Total Debt" />
                   <Line type="monotone" dataKey="netWorth" stroke="#3B82F6" strokeWidth={3} name="Total Net Worth" />
-                </LineChart>
+                </AreaChart>
               </ResponsiveContainer>
             )}
           </div>
@@ -959,7 +1176,7 @@ const FinancialDashboard: React.FC = () => {
           </div>
         )}
 
-        {/* Portfolio Tab (placeholder until you wire live data) */}
+        {/* Portfolio Tab */}
         {activeTab === 'portfolio' && (
           <div className="space-y-6">
             <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
@@ -981,7 +1198,7 @@ const FinancialDashboard: React.FC = () => {
                   {loadingPortfolio ? 'Loading…' : 'Load'}
                 </button>
               </div>
-
+              
               {portfolioError && (
                 <div className="mt-3 text-sm rounded-lg border border-red-500/40 bg-red-500/10 text-red-200 px-3 py-2">
                   {portfolioError}
@@ -994,6 +1211,48 @@ const FinancialDashboard: React.FC = () => {
                 </div>
               )}
             </div>
+            <div className="bg-gray-800 rounded-xl p-6 border border-gray-700 mb-6">
+              <h3 className="text-xl font-bold mb-4">Live Price Refresh</h3>
+              <div className="flex flex-col md:flex-row gap-3">
+                <input
+                  type="password"
+                  className="..."
+                  placeholder="Paste your EODHD API Key here..." // <-- Updated text
+                  value={apiKey}
+                  onChange={handleApiKeyChange}
+                />
+                <button
+                  onClick={fetchLivePrices} // This will now be our new function
+                  disabled={!apiKey || loadingPrices}
+                  className={`px-5 py-2 rounded-lg font-medium ${loadingPrices || !apiKey ? 'bg-gray-600' : 'bg-green-600 hover:bg-green-500'}`}
+                >
+                  {loadingPrices ? 'Refreshing...' : 'Refresh Prices'}
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 mt-2">API key is saved in your browser's local storage.</p>
+              {tickerChanges.length > 0 && (
+                <div className="mt-3 text-xs rounded-lg border border-sky-500/40 bg-sky-500/10 text-sky-200 px-3 py-2">
+                  <p className="font-semibold mb-1">Note: The following tickers were automatically normalized for the API call:</p>
+                  <ul className="list-disc pl-5">
+                    {tickerChanges.map((change, index) => (
+                      <li key={index}>
+                        `{change.original}` was converted to `{change.normalized}`
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+            {unmappedTickers.length > 0 && (
+              <div className="mt-4 text-sm rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 px-4 py-3">
+                <h4 className="font-bold mb-2">Warning: Unmapped Tickers Found</h4>
+                <p className="mb-2">The following tickers from your portfolio were not found in the `tickerApiMap` and were not updated:</p>
+                <ul className="list-disc pl-5 font-mono">
+                  {unmappedTickers.map(t => <li key={t}>{t}</li>)}
+                </ul>
+                <p className="mt-2">To fix this, please add them to the `tickerApiMap` constant in `FinancialDashboard.tsx`.</p>
+              </div>
+            )}
             <div className="flex items-center gap-3">
               <label className="inline-flex items-center gap-2 text-sm">
                 <input
@@ -1009,14 +1268,13 @@ const FinancialDashboard: React.FC = () => {
             {portfolio.length === 0 ? (
               <div className="bg-gray-800 rounded-xl p-6 border border-gray-700 text-gray-300">
                 Paste your Google Sheets **published CSV** URL above and click **Load**.
-                Tip: Columns should be <b>Ticker, Qty, Price, Value, Name</b>. Values should be in ILS if you want ILS charts.
+                Tip: Columns should be <b>Ticker, Qty, Price, Value, Name</b>.
               </div>
             ) : (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Pie */}
                 <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
                   <h4 className="text-lg font-bold mb-4">Holdings by Value</h4>
-                  <ResponsiveContainer width="100%" height={360}>
+                  <ResponsiveContainer width="100%" height={420}>
                     <PieChart>
                       <Pie
                         data={pieData}
@@ -1024,7 +1282,7 @@ const FinancialDashboard: React.FC = () => {
                         nameKey="name"
                         cx="50%"
                         cy="50%"
-                        outerRadius={130}
+                        outerRadius={120}
                         label={(e: any) => `${e.name}: ${fmtILS(e.value)}`}
                       >
                         {pieData.map((_, i) => (
@@ -1049,7 +1307,6 @@ const FinancialDashboard: React.FC = () => {
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
-                {/* Category Pie */}
                 <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
                   <h4 className="text-lg font-bold mb-4">Allocation by Category</h4>
                   <ResponsiveContainer width="100%" height={360}>
@@ -1085,7 +1342,6 @@ const FinancialDashboard: React.FC = () => {
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
-                {/* Table */}
                 <div className="bg-gray-800 rounded-xl p-6 border border-gray-700 overflow-auto lg:col-span-2">
                   <h4 className="text-lg font-bold mb-4">Positions</h4>
                   <table className="min-w-full text-sm">
@@ -1098,15 +1354,12 @@ const FinancialDashboard: React.FC = () => {
                         <th className="py-2 pr-4 text-right">Price</th>
                         <th className="py-2 pr-4 text-right">Value</th>
                         <th className="py-2 pr-0 text-right">% Weight</th>
-                        <th className="py-2 pr-0 text-right">% Category</th>
-                        
                       </tr>
                     </thead>
                     <tbody>
                       {combinedPortfolio.map((p, i) => {
                         const v = p.value || (p.qty * p.price)
                         const w = combinedTotal  ? (v / combinedTotal ) * 100 : 0
-                        const catW = (categoryAgg.find(c => c.category === p.category)?.weight) ?? 0
                         return (
                           <tr key={i} className="border-top border-gray-700">
                             <td className="py-2 pr-4">{p.category || "Uncategorized"}</td>
@@ -1116,7 +1369,13 @@ const FinancialDashboard: React.FC = () => {
                             <td className="py-2 pr-4 text-right">{fmtILS(p.price)}</td>
                             <td className="py-2 pr-4 text-right">{fmtILS(v)}</td>
                             <td className="py-2 pr-0 text-right">{w.toFixed(2)}%</td>
-                            <td className="py-2 pr-0 text-right">{catW.toFixed(2)}%</td>
+                            <td className="py-2 pr-4 text-right">
+                              <button 
+                                onClick={() => handleEditStock(p.ticker)} 
+                                className="text-blue-400 hover:text-blue-300 text-xs">
+                                Edit Qty
+                              </button>
+                            </td>
                           </tr>
                         )
                       })}
@@ -1124,7 +1383,6 @@ const FinancialDashboard: React.FC = () => {
                         <td className="py-2 pr-4" colSpan={5}>Total</td>
                         <td className="py-2 pr-4 text-right">{fmtILS(combinedTotal)}</td>
                         <td className="py-2 pr-0 text-right">100.00%</td>
-                        <td className="py-2 pr-0 text-right">—</td>
                       </tr>
                     </tbody>
                   </table>
