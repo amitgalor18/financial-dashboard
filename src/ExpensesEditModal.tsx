@@ -1,5 +1,6 @@
 // src/ExpensesEditModal.tsx
 import React, { useState, useEffect } from 'react';
+import dayjs from 'dayjs';
 
 // Re-use or import the SeriesRow type
 interface SeriesRow {
@@ -16,17 +17,35 @@ interface Props {
   onSave: (data: { expenses: SeriesRow[], income: SeriesRow[] }) => void;
   monthData: { expenses: SeriesRow[], income: SeriesRow[] };
   month: string;
+  schema: { expenses: any[], income: any[] };
 }
 
-export const ExpensesEditModal: React.FC<Props> = ({ isOpen, onClose, onSave, monthData, month }) => {
+export const ExpensesEditModal: React.FC<Props> = ({ isOpen, onClose, onSave, monthData, month, schema }) => {
   const [expenses, setExpenses] = useState<SeriesRow[]>([]);
   const [income, setIncome] = useState<SeriesRow[]>([]);
 
   useEffect(() => {
-    // Deep copy to prevent modifying the original state directly
-    setExpenses(JSON.parse(JSON.stringify(monthData.expenses)));
-    setIncome(JSON.parse(JSON.stringify(monthData.income)));
-  }, [monthData, isOpen]);
+    // Now, we merge the month's actual data with the master schema
+    const mergeWithSchema = (currentItems: SeriesRow[], itemSchema: any[]) => {
+      const itemMap = new Map(currentItems.map(item => [item['הוצאות'], item]));
+      // Ensure every possible item from the schema is in our list, with Amount: 0 if it wasn't there before
+      itemSchema.forEach(schemaItem => {
+        if (!itemMap.has(schemaItem.expense)) {
+          itemMap.set(schemaItem.expense, {
+            Month: dayjs(month).toDate(),
+            Amount: 0,
+            'קטגוריה ראשית': schemaItem.main,
+            'תת-קטגוריה': schemaItem.sub,
+            'הוצאות': schemaItem.expense,
+          });
+        }
+      });
+      return Array.from(itemMap.values());
+    };
+    setExpenses(mergeWithSchema(monthData.expenses, schema.expenses));
+    setIncome(mergeWithSchema(monthData.income, schema.income));
+  }, [monthData, schema, month, isOpen]);
+
 
   if (!isOpen) return null;
 
