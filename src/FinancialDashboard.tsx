@@ -32,13 +32,31 @@ interface IncomeExpensesRow {
 
 type DetailedNetWorthRow = {
   Month: Date;
-  Cash: number; MMF: number; Bonds: number; Stocks: number; Hishtalmut: number;
-  ProvFund: number; RealEstateInv: number; Crypto: number;
-  Pension: number; Car: number; Residence: number; OtherNonLiquid: number;
-  Mortgage: number; Loans: number; CreditCardDebt: number;
-  'Total Liquid Assets': number; 'Total Non-Liquid Assets': number;
-  'Total Debt': number; 'Net Worth': number;
-  Type?: 'Actual' | 'Projected'; // Added for projections
+  Cash: number; 
+  MMF: number; 
+  Bonds: number; 
+  Stocks: number; 
+  Hishtalmut: number;
+  ProvFund: number; 
+  RealEstateInv: number; 
+  Crypto: number;
+  Pension: number; 
+  Car: number; 
+  Residence: number; 
+  OtherNonLiquid: number;
+  Mortgage: number; 
+  Loans: number; 
+  CreditCardDebt: number;
+  'Total Liquid Assets': number | null; 
+  'Total Non-Liquid Assets': number | null;
+  'Total Debt': number | null; 
+  'Net Worth': number | null;
+  // Projected fields for chart display
+  'Projected Total Liquid Assets'?: number | null;
+  'Projected Total Non-Liquid Assets'?: number | null;
+  'Projected Total Debt'?: number | null;
+  'Projected Net Worth'?: number | null;
+  Type?: 'Actual' | 'Projected';
 };
 
 const toNumber = (v: any) => (v == null || v === '' ? 0 : Number(v)) // Default to 0 instead of NaN
@@ -82,7 +100,8 @@ const FinancialDashboard: React.FC = () => {
   const [netWorthDF, setNetWorthDF] = React.useState<DetailedNetWorthRow[]>([]);
   const [isNetWorthModalOpen, setIsNetWorthModalOpen] = React.useState<boolean>(false);
   const [editingNetWorthRow, setEditingNetWorthRow] = React.useState<DetailedNetWorthRow | null>(null);
-  const [combinedNetWorthDF, setCombinedNetWorthDF] = React.useState<DetailedNetWorthRow[]>([]);
+  // const [chartDataDF, setChartDataDF] = React.useState<DetailedNetWorthRow[]>([]);
+  // const [combinedNetWorthDF, setCombinedNetWorthDF] = React.useState<DetailedNetWorthRow[]>([]);
   
   // State for Portfolio
   const [portfolio, setPortfolio] = React.useState<Array<{ticker:string; name:string; qty:number; price:number; value:number, category:string}>>([])
@@ -121,7 +140,7 @@ const FinancialDashboard: React.FC = () => {
     'ISFF702': 'ISFF702.TA',
     'ISFF101': 'iSFF101.TA',
     'ISFF701': 'IS-FF701.TA',
-    'ISFF505': 'IS-FF505.TA',
+    'ISFF505': 'ISFF505.TA',
     'ISFF102': 'IS-FF102.TA',
     'INFF1': 'IN-FF1.TA',
     'INFF7': 'IN-FF7.TA',
@@ -183,6 +202,29 @@ const FinancialDashboard: React.FC = () => {
     setIncomeExpensesDF(finalIncExp);
   }, [expensesTime, incomeTime]);
 
+  React.useEffect(() => {
+    // Check if there is data to avoid running on initial load
+    if (expensesTime.length > 0) {
+      // Find the most recent date in the entire expenses list
+      const lastDate = expensesTime.reduce((latest, current) => 
+          current.Month > latest ? current.Month : latest, expensesTime[0].Month);
+      
+      // Set the selected month to the latest one found
+      setSelectedMonth(dayjs(lastDate).format('YYYY-MM'));
+    }
+  }, [expensesTime]); // This effect runs whenever expensesTime changes
+
+  // React.useEffect(() => {
+  //   // This effect ensures that whenever the historical data changes,
+  //   // we automatically recalculate the projections and update the chart data.
+  //   if (netWorthDF.length > 0) {
+  //     const newCombinedData = calculateProjections(netWorthDF);
+  //     setChartDataDF(newCombinedData);
+  //   } else {
+  //     setChartDataDF([]);
+  //   }
+  // }, [netWorthDF]);
+
   // Compute FI when both datasets are present
   React.useEffect(() => {
     if (!netWorthDF.length || !incomeExpensesDF.length) return
@@ -221,52 +263,42 @@ const FinancialDashboard: React.FC = () => {
   };
   
   async function onFinanceExcelChosen(file: File) {
-      setFinanceFileName(file.name)
+    setFinanceFileName(file.name);
 
-      const buf = await file.arrayBuffer()
-      const wb = XLSX.read(buf)
-      const ws = wb.Sheets[wb.SheetNames[0]]
-      if (!ws) {
-        return
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf);
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    if (!ws) return;
+
+    const A: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null });
+    const toCell = (row: any[], i: number) => (i >= 0 && i < row.length ? row[i] : null);
+
+    // --- Header and Month Detection Logic (No changes here) ---
+    const STATIC = ['קטגוריה ראשית', 'תת-קטגוריה', 'הוצאות'];
+    let headerRowIdx = -1;
+    let colIdx: Record<string, number> = {};
+    for (let r = 0; r < Math.min(A.length, 30); r++) { 
+      const row = A[r] || [];
+      const hits: Record<string, number> = {};
+      for (let c = 0; c < row.length; c++) {
+        const cell = (row[c] ?? '').toString().trim();
+        if (STATIC.includes(cell)) hits[cell] = c;
       }
-
-      const A: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null })
-
-      // Helper function to convert cell values
-      const toCell = (row: any[], i: number) => (i >= 0 && i < row.length ? row[i] : null)
-
-      // Find header row
-      const STATIC = ['קטגוריה ראשית', 'תת-קטגוריה', 'הוצאות']
-      let headerRowIdx = -1
-      let colIdx: Record<string, number> = {}
-      for (let r = 0; r < Math.min(A.length, 30); r++) { 
-        const row = A[r] || []
-        const hits: Record<string, number> = {}
-        for (let c = 0; c < row.length; c++) {
-          const cell = (row[c] ?? '').toString().trim()
-          if (STATIC.includes(cell)) hits[cell] = c
-        }
-        if (Object.keys(hits).length === STATIC.length) {
-          headerRowIdx = r
-          colIdx = hits
-          break
-        }
+      if (Object.keys(hits).length === STATIC.length) {
+        headerRowIdx = r;
+        colIdx = hits;
+        break;
       }
-      if (headerRowIdx === -1) {
-        setFinanceStats({ months: 0, expRows: 0, incRows: 0 })
-        return
-      }
-
-      const headers = A[headerRowIdx].map((v) => (v === null ? '' : String(v)))
-      const idxMain = colIdx['קטגוריה ראשית']
-      const idxSub = colIdx['תת-קטגוריה']
-      const idxHotsaot = colIdx['הוצאות']
-
-      // Find month columns
-      const monthColIdxs: number[] = []
-      for (let c = 0; c < headers.length; c++) {
-        if (c !== idxMain && c !== idxSub && c !== idxHotsaot) monthColIdxs.push(c)
-      }
+    }
+    if (headerRowIdx === -1) { return; }
+    const headers = A[headerRowIdx].map((v) => (v === null ? '' : String(v)));
+    const idxMain = colIdx['קטגוריה ראשית'];
+    const idxSub = colIdx['תת-קטגוריה'];
+    const idxHotsaot = colIdx['הוצאות'];
+    const monthColIdxs: number[] = [];
+    for (let c = 0; c < headers.length; c++) {
+      if (c !== idxMain && c !== idxSub && c !== idxHotsaot) monthColIdxs.push(c);
+    }
 
       const monthKeys = monthColIdxs
         .map((c) => {
@@ -302,48 +334,40 @@ const FinancialDashboard: React.FC = () => {
       
       // Process rows with fill-down logic and build master schema
       const processRows = (rowsToProcess: any[][]) => {
-        const timeSeries: SeriesRow[] = []
-        const schema = new Map<string, { main: string, sub: string }>()
-        
-        let lastMainCategory = ''
-        let lastSubCategory = ''
+        const timeSeries: SeriesRow[] = [];
+        const schema = new Map<string, { main: string, sub: string }>();
+        let lastMainCategory = '';
+        let lastSubCategory = '';
 
         for (const row of rowsToProcess) {
-          const main = toCell(row, idxMain)
-          const sub = toCell(row, idxSub)
-          const expenseName = toCell(row, idxHotsaot)
+          const main = toCell(row, idxMain);
+          const sub = toCell(row, idxSub);
+          const expenseName = toCell(row, idxHotsaot);
 
-          // Fill down logic
-          if (main) lastMainCategory = main
-          if (sub) lastSubCategory = sub
+          if (main) lastMainCategory = main;
+          if (sub) lastSubCategory = sub;
+          if (!expenseName) continue;
+
+          // ✅ FIX: This check is now less strict. It correctly includes items like "Bonus".
+          if (expenseName && !schema.has(expenseName)) {
+              schema.set(expenseName, { main: lastMainCategory, sub: lastSubCategory });
+          }
           
-          // Skip rows that don't have an expense name (they are just category headers)
-          if (!expenseName) continue
-
-          // Add to master schema if it's a valid expense row
-          if (lastMainCategory && lastSubCategory && expenseName) {
-            if (!schema.has(expenseName)) {
-              schema.set(expenseName, { main: lastMainCategory, sub: lastSubCategory })
+          for (const { col, d } of monthKeys) {
+            const val = Number(toCell(row, col));
+            if (Number.isFinite(val) && val !== 0) {
+              timeSeries.push({
+                Month: new Date(d.setHours(0, 0, 0, 0)),
+                Amount: val,
+                'קטגוריה ראשית': lastMainCategory,
+                'תת-קטגוריה': lastSubCategory,
+                'הוצאות': expenseName,
+              });
             }
           }
-          
-          // Create time series data for all months (including 0 values)
-          for (const { col, d } of monthKeys) {
-            const val = Number(toCell(row, col)) || 0 // Default to 0 for empty/null values
-            timeSeries.push({
-              Month: new Date(d.setHours(0, 0, 0, 0)),
-              Amount: val,
-              'קטגוריה ראשית': lastMainCategory,
-              'תת-קטגוריה': lastSubCategory,
-              'הוצאות': expenseName,
-            })
-          }
         }
-        return { 
-          timeSeries, 
-          schema: Array.from(schema.entries()).map(([expense, cats]) => ({ expense, ...cats })) 
-        }
-      }
+        return { timeSeries, schema: Array.from(schema.entries()).map(([expense, cats]) => ({ expense, ...cats })) };
+      };
 
       const EXPENSES_CUTOFF = 57
       const INCOME_CUTOFF = 68
@@ -414,21 +438,10 @@ const FinancialDashboard: React.FC = () => {
         incRows: incomeResult.timeSeries.length 
       })
 
-      // Set the selected month to the latest month
-      if (finalIncExp.length) {
-        const last = finalIncExp.at(-1)!.Month
-        const ym = `${last.getFullYear()}-${String(last.getMonth() + 1).padStart(2, '0')}`
-        setSelectedMonth(ym)
-      }
+
   }
 
-  // CLEANUP: This function was for a hardcoded URL. The new `loadFromSheetClick` is the primary one.
-  // It can be removed or kept for testing. I'll comment it out.
-  // async function loadFromSheet() {
-  //   const rows = await fetchPortfolioCSV("https://docs.google.com/spreadsheets/d/e/2PACX-1vSltL3NxXUBQLwhaHW8Gist2I6qVRt8p3fPILBbEEXzcplzFMu8j0-K2JCJgj7hrTcoxCq-JUJN2v6j/pub?output=csv")
-  //   setPortfolio(rows)
-  //   // setTotalValue(rows.reduce((a,b) => a + (b.value || b.qty*b.price || 0), 0))
-  // }
+
 
   async function loadFromSheetClick() {
     try {
@@ -453,16 +466,16 @@ const FinancialDashboard: React.FC = () => {
     }
   }
   
-  const calculateProjections = (historicalData: DetailedNetWorthRow[]) => {
+  const calculateProjections = (historicalData: DetailedNetWorthRow[]): DetailedNetWorthRow[] => {
     if (historicalData.length === 0) {
-      setCombinedNetWorthDF([]);
-      return;
+      return [];
     }
-
+    const actualData = historicalData.filter(r => r.Type !== 'Projected');
+    
     const ord = (d: Date) => Math.floor(+d / (24 * 3600 * 1000));
-    const recent = historicalData.slice(-24).filter((r) => r['Net Worth'] > 0);
+    const recent = actualData.slice(-24).filter((r) => r['Net Worth'] && r['Net Worth'] > 0);
     const X = recent.map((r) => ord(r.Month));
-    const Y = recent.map((r) => Math.log(r['Net Worth']));
+    const Y = recent.map((r) => Math.log(r['Net Worth'] as number));
     const n = X.length;
     let slope = 0, intercept = 0;
 
@@ -475,9 +488,9 @@ const FinancialDashboard: React.FC = () => {
       intercept = my - slope * mx;
     }
 
-    const last = historicalData.at(-1)!;
-    const totalAssets = (last['Total Liquid Assets'] + last['Total Non-Liquid Assets']) || 1;
-    const pL = last['Total Liquid Assets'] / totalAssets;
+    const last = actualData.at(-1)!;
+    const totalAssets = ((last['Total Liquid Assets'] || 0) + (last['Total Non-Liquid Assets'] || 0)) || 1;
+    const pL = (last['Total Liquid Assets'] || 0) / totalAssets;
     const pN = 1 - pL;
 
     const future: DetailedNetWorthRow[] = [];
@@ -487,20 +500,55 @@ const FinancialDashboard: React.FC = () => {
       const netWorth = Math.exp(intercept + slope * x);
       const projectedLiquid = netWorth * pL;
       const projectedNonLiquid = netWorth * pN;
-
+      
       future.push({
-        Month: m, 'Net Worth': netWorth, 'Total Liquid Assets': projectedLiquid,
-        'Total Non-Liquid Assets': projectedNonLiquid, Type: 'Projected',
+        Month: m,
+        // Set actual values to null for projected rows
+        'Net Worth': null,
+        'Total Liquid Assets': null,
+        'Total Non-Liquid Assets': null,
+        'Total Debt': null,
+        // Set projected values
+        'Projected Net Worth': netWorth,
+        'Projected Total Liquid Assets': projectedLiquid,
+        'Projected Total Non-Liquid Assets': projectedNonLiquid,
+        'Projected Total Debt': 0,
+        Type: 'Projected',
         Cash: 0, MMF: 0, Bonds: 0, Stocks: 0, Hishtalmut: 0, ProvFund: 0,
         RealEstateInv: 0, Crypto: 0, Pension: 0, Car: 0, Residence: 0,
-        OtherNonLiquid: 0, Mortgage: 0, Loans: 0, CreditCardDebt: 0, 'Total Debt': 0,
+        OtherNonLiquid: 0, Mortgage: 0, Loans: 0, CreditCardDebt: 0,
       });
     }
 
-    setCombinedNetWorthDF([
-      ...historicalData.map(r => ({ ...r, Type: 'Actual' as const })),
-      ...future
-    ]);
+    // Map historical data: all rows get null projected values EXCEPT the last one
+    const processedHistorical = actualData.map((r, index) => {
+      const isLastRow = index === actualData.length - 1;
+      
+      if (isLastRow) {
+        // For the last row, set projected values equal to actual values
+        // This creates the connection point for the projected lines
+        return {
+          ...r,
+          Type: 'Actual' as const,
+          'Projected Net Worth': r['Net Worth'],
+          'Projected Total Liquid Assets': r['Total Liquid Assets'],
+          'Projected Total Non-Liquid Assets': r['Total Non-Liquid Assets'],
+          'Projected Total Debt': r['Total Debt'],
+        };
+      } else {
+        // For all other rows, projected values are null
+        return {
+          ...r,
+          Type: 'Actual' as const,
+          'Projected Net Worth': null,
+          'Projected Total Liquid Assets': null,
+          'Projected Total Non-Liquid Assets': null,
+          'Projected Total Debt': null,
+        };
+      }
+    });
+
+    return [...processedHistorical, ...future];
   };
 
   const combinedPortfolio = React.useMemo(() => {
@@ -575,33 +623,136 @@ const FinancialDashboard: React.FC = () => {
   };
 
   const handleSaveNetWorthChanges = (updatedRow: DetailedNetWorthRow) => {
-    // Recalculate totals based on edited components
-    const totalLiquid = updatedRow.Cash + updatedRow.MMF + updatedRow.Bonds + updatedRow.Stocks + updatedRow.Hishtalmut + updatedRow.ProvFund + updatedRow.RealEstateInv + updatedRow.Crypto;
-    const totalNonLiquid = updatedRow.Pension + updatedRow.Car + updatedRow.Residence;
-    const totalDebt = updatedRow.Mortgage + updatedRow.Loans + updatedRow.CreditCardDebt;
-    const netWorth = totalLiquid + totalNonLiquid - totalDebt;
+  // Recalculate totals for the saved row
+  const totalLiquid = updatedRow.Cash + updatedRow.MMF + updatedRow.Bonds + updatedRow.Stocks + updatedRow.Hishtalmut + updatedRow.ProvFund + updatedRow.RealEstateInv + updatedRow.Crypto;
+  const totalNonLiquid = updatedRow.Pension + updatedRow.Car + updatedRow.Residence + updatedRow.OtherNonLiquid;
+  const totalDebt = updatedRow.Mortgage + updatedRow.Loans + updatedRow.CreditCardDebt;
+  const netWorth = totalLiquid + totalNonLiquid - totalDebt;
 
-    // Create the final, recalculated row
-    const finalRow = {
-      ...updatedRow,
-      'Total Liquid Assets': totalLiquid,
-      'Total Non--Liquid Assets': totalNonLiquid,
-      'Total Debt': totalDebt,
-      'Net Worth': netWorth,
+  const finalRow: DetailedNetWorthRow = {
+    ...updatedRow,
+    'Total Liquid Assets': totalLiquid, 'Total Non-Liquid Assets': totalNonLiquid,
+    'Total Debt': totalDebt, 'Net Worth': netWorth, Type: 'Actual',
+  };
+
+  // Get the current list of ONLY actual data by filtering our main state
+  const currentActualData = netWorthDF.filter(row => row.Type !== 'Projected');
+  
+  const monthExists = currentActualData.some(row => dayjs(row.Month).isSame(dayjs(finalRow.Month), 'month'));
+  
+  // Create nextActualData (the new constant your expert mentioned)
+  const nextActualData = monthExists
+    ? currentActualData.map(row => dayjs(row.Month).isSame(dayjs(finalRow.Month), 'month') ? finalRow : row)
+    : [...currentActualData, finalRow];
+  
+  nextActualData.sort((a, b) => +new Date(a.Month) - +new Date(b.Month));
+
+  // Calculate projections with the NEW actual data and set state once
+  const nextCombinedData = calculateProjections(nextActualData);
+  setNetWorthDF(nextCombinedData);
+  
+  setIsNetWorthModalOpen(false);
+  setEditingNetWorthRow(null);
+};
+
+  const handleOpenEditMonthModal = () => {
+    if (!selectedMonth) {
+      alert("Please select a month to edit.");
+      return;
+    }
+    setEditingMonth(selectedMonth);
+    setMonthlyItems({
+      expenses: expensesTime.filter(r => dayjs(r.Month).format('YYYY-MM') === selectedMonth),
+      income: incomeTime.filter(r => dayjs(r.Month).format('YYYY-MM') === selectedMonth),
+    });
+    setIsExpenseModalOpen(true);
+  };
+
+  const handleOpenAddMonthModal = () => {
+    const newMonthStr = prompt("Enter new month to add (YYYY-MM):", dayjs().add(1, 'month').format('YYYY-MM'));
+    
+    // Validate the user input
+    if (!newMonthStr || !/^\d{4}-\d{2}$/.test(newMonthStr)) {
+        if (newMonthStr) alert("Invalid format. Please use YYYY-MM.");
+        return;
+    }
+
+    // Check if data for this month already exists
+    const monthExists = expensesTime.some(r => dayjs(r.Month).format('YYYY-MM') === newMonthStr);
+    if (monthExists) {
+        alert(`Data for ${newMonthStr} already exists. Please use the 'Edit This Month' button to make changes.`);
+        return;
+    }
+
+    // Set the month we are creating
+    setEditingMonth(newMonthStr);
+    const newMonthDate = dayjs(newMonthStr).toDate();
+
+    // Create a blank slate of expenses based on the master schema
+    const newExpenses = expenseSchema.expenses.map(schemaItem => ({
+        Month: newMonthDate,
+        Amount: 0,
+        'קטגוריה ראשית': schemaItem.main,
+        'תת-קטגוריה': schemaItem.sub,
+        'הוצאות': schemaItem.expense,
+    }));
+    
+    // Create a blank slate of income based on the master schema
+    const newIncome = expenseSchema.income.map(schemaItem => ({
+        Month: newMonthDate,
+        Amount: 0,
+        'קטגוריה ראשית': schemaItem.main,
+        'תת-קטגוריה': schemaItem.sub,
+        'הוצאות': schemaItem.expense,
+    }));
+
+    // Set the data for the modal and open it
+    setMonthlyItems({ expenses: newExpenses, income: newIncome });
+    setIsExpenseModalOpen(true);
+  };
+
+  const handleOpenEditNetWorthModal = () => {
+    const monthToEdit = prompt("Enter month to edit (YYYY-MM):", dayjs().format('YYYY-MM'));
+    if (monthToEdit) {
+      const row = netWorthDF.find(r => dayjs(r.Month).format('YYYY-MM') === monthToEdit);
+      if (row) {
+        setEditingNetWorthRow(row);
+        setIsNetWorthModalOpen(true);
+      } else {
+        alert("Month not found in data.");
+      }
+    }
+  };
+
+  const handleOpenAddNetWorthModal = () => {
+    const newMonthStr = prompt("Enter new month to add (YYYY-MM):", dayjs().add(1, 'month').format('YYYY-MM'));
+    
+    if (!newMonthStr || !/^\d{4}-\d{2}$/.test(newMonthStr)) {
+        if (newMonthStr) alert("Invalid format. Please use YYYY-MM.");
+        return;
+    }
+
+    const actualDataOnly = netWorthDF.filter(r => r.Type !== 'Projected');
+
+    const monthExists = actualDataOnly.some(r => dayjs(r.Month).format('YYYY-MM') === newMonthStr);
+    if (monthExists) {
+        alert(`Data for ${newMonthStr} already exists. Please use the 'Edit Month' button.`);
+        return;
+    }
+
+    const lastKnownRow = actualDataOnly.length > 0 ? actualDataOnly[actualDataOnly.length - 1] : null;
+    
+    const newRow: DetailedNetWorthRow = {
+        ...(lastKnownRow || { Cash: 0, MMF: 0, Bonds: 0, Stocks: 0, Hishtalmut: 0, ProvFund: 0, RealEstateInv: 0, Crypto: 0, Pension: 0, Car: 0, Residence: 0, OtherNonLiquid: 0, Mortgage: 0, Loans: 0, CreditCardDebt: 0 }),
+        Month: dayjs(newMonthStr).toDate(),
+        'Total Liquid Assets': null, 'Total Non-Liquid Assets': null,
+        'Total Debt': null, 'Net Worth': null, Type: 'Actual',
+        'Projected Total Liquid Assets': null, 'Projected Total Non-Liquid Assets': null,
+        'Projected Total Debt': null, 'Projected Net Worth': null,
     };
 
-    // Update the main state
-    setNetWorthDF(prev => 
-      prev.map(row => 
-        dayjs(row.Month).isSame(dayjs(finalRow.Month), 'month') 
-          ? finalRow 
-          : row
-      )
-    );
-
-    // Close the modal
-    setIsNetWorthModalOpen(false);
-    setEditingNetWorthRow(null);
+    setEditingNetWorthRow(newRow);
+    setIsNetWorthModalOpen(true);
   };
 
   const extractLowRiskItems = (fullNetWorthData: Row[]) => {
@@ -614,14 +765,7 @@ const FinancialDashboard: React.FC = () => {
       const idxMonth = 0;
       const idxCash = 1;
       const idxMMF = 2;
-      // CLEANUP: These idx variables were declared but not used in this specific function.
-      // They are used for context/understanding the sheet layout. Can be removed for cleaner code.
-      // const idxBonds = 3;
-      // const idxStocks = 4;
-      // const idxHishtalmut = 5;
-      // const idxProvFund = 6;
-      // const idxRealEstate = 7;
-      // const idxCrypto = 10;
+
       const key = (i: number) => headers[i];
 
       const lastRow = [...fullNetWorthData].reverse().find((r: any) => {
@@ -646,19 +790,14 @@ const FinancialDashboard: React.FC = () => {
   };
 
   async function onFireExcelChosen(file: File) {
-    setFireFileName(file.name)
-    
-    const buf = await file.arrayBuffer()
-    const wb = XLSX.read(buf)
-    const ws = wb.Sheets['מעקב שווי נקי'] ?? wb.Sheets[wb.SheetNames[0]]
-    const df: Row[] = XLSX.utils.sheet_to_json(ws, { defval: null, header: 6 })
-    // setRawNetWorthDF(df);
+    setFireFileName(file.name);
+    const buf = await file.arrayBuffer();
+    const wb = XLSX.read(buf);
+    const ws = wb.Sheets['מעקב שווי נקי'] ?? wb.Sheets[wb.SheetNames[0]];
+    const df: Row[] = XLSX.utils.sheet_to_json(ws, { defval: null, header: 6 });
 
     const detailedNet = df.map((r: Row) => {
       const cols = Object.keys(r);
-
-      // --- TODO: Update these column indices to match your Excel file ---
-      // You can find these by counting columns (starting from 0) in your sheet
       const cash = toNumber(r[cols[1]]);
       const mmf = toNumber(r[cols[2]]);
       const bonds = toNumber(r[cols[3]]);
@@ -667,18 +806,14 @@ const FinancialDashboard: React.FC = () => {
       const provFund = toNumber(r[cols[6]]);
       const realEstateInv = toNumber(r[cols[7]]);
       const crypto = toNumber(r[cols[10]]);
-
       const pension = toNumber(r[cols[12]]);
       const residence = toNumber(r[cols[13]]);
       const car = toNumber(r[cols[14]]);
-      const otherNonLiquid = toNumber(r[cols[16]]); // If you have other non-liquid assets
+      const otherNonLiquid = toNumber(r[cols[16]]);
+      const mortgage = Math.abs(toNumber(r[cols[25]]));
+      const loans = Math.abs(toNumber(r[cols[19]]));
+      const creditCardDebt = Math.abs(toNumber(r[cols[18]]));
 
-      const mortgage = Math.abs(toNumber(r[cols[25]])); // Ensure debt is positive
-      const loans = Math.abs(toNumber(r[cols[19]]));     // Ensure debt is positive
-      const creditCardDebt = Math.abs(toNumber(r[cols[18]])); // Ensure debt is positive
-      // --- END OF TODO ---
-
-      // Automatically calculate totals from the components
       const totalLiquid = cash + mmf + bonds + stocks + hishtalmut + provFund + realEstateInv + crypto;
       const totalNonLiquid = pension + car + residence + otherNonLiquid;
       const totalDebt = mortgage + loans + creditCardDebt;
@@ -692,66 +827,15 @@ const FinancialDashboard: React.FC = () => {
         Mortgage: mortgage, Loans: loans, CreditCardDebt: creditCardDebt,
         'Total Liquid Assets': totalLiquid,
         'Total Non-Liquid Assets': totalNonLiquid,
-        'Total Debt': totalDebt, // Stored as positive
+        'Total Debt': totalDebt,
         'Net Worth': netWorth,
       };
     })
     .filter((r) => r.Month && !isNaN(+r.Month))
     .sort((a, b) => +new Date(a.Month) - +new Date(b.Month));
 
-    // simple exponential projection
-    const ord = (d: Date) => Math.floor(+d / (24 * 3600 * 1000))
-    const recent = detailedNet.slice(-24).filter((r) => r['Net Worth'] > 0)
-    const X = recent.map((r) => ord(r.Month))
-    const Y = recent.map((r) => Math.log(r['Net Worth']))
-    const n = X.length
-    let slope = 0,
-      intercept = 0
-    if (n >= 2) {
-      const mx = X.reduce((a, b) => a + b, 0) / n
-      const my = Y.reduce((a, b) => a + b, 0) / n
-      const num = X.map((x, i) => (x - mx) * (Y[i] - my)).reduce((a, b) => a + b, 0)
-      const den = X.map((x) => (x - mx) ** 2).reduce((a, b) => a + b, 0)
-      slope = den ? num / den : 0
-      intercept = my - slope * mx
-    }
-
-    const last = detailedNet.at(-1)?.Month ?? new Date()
-    const lastRow = detailedNet.at(-1)
-    const total = ((lastRow?.['Total Liquid Assets'] ?? 0) + (lastRow?.['Total Non-Liquid Assets'] ?? 0)) || 1
-    const pL = (lastRow?.['Total Liquid Assets'] ?? 0) / total
-    const pN = 1 - pL
-
-    const future: DetailedNetWorthRow[] = [] 
-    for (let i = 1; i <= 12; i++) {
-      const m = dayjs(last).add(i, 'month').startOf('month').toDate()
-      const x = ord(m)
-      const netWorth = Math.exp(intercept + slope * x)
-      
-      // Project liquid and non-liquid assets based on the last known ratio
-      const projectedLiquid = netWorth * pL;
-      const projectedNonLiquid = netWorth * pN;
-
-      future.push({
-        Month: m,
-        'Net Worth': netWorth,
-        'Total Liquid Assets': projectedLiquid,
-        'Total Non-Liquid Assets': projectedNonLiquid,
-        Type: 'Projected',
-        Cash: 0, MMF: 0, Bonds: 0, Stocks: 0, Hishtalmut: 0,
-        ProvFund: 0, RealEstateInv: 0, Crypto: 0, Pension: 0, 
-        Car: 0, Residence: 0, OtherNonLiquid: 0, Mortgage: 0, 
-        Loans: 0, CreditCardDebt: 0, 'Total Debt': 0,
-      })
-    }
-
-    setNetWorthDF(detailedNet);
-    calculateProjections(detailedNet);
-    // setCombinedNetWorthDF([
-    //     ...detailedNet.map(r => ({ ...r, Type: 'Actual' as const })),
-    //     ...future
-    // ]);
-    
+    const newCombinedData = calculateProjections(detailedNet);
+    setNetWorthDF(newCombinedData);
     extractLowRiskItems(df); 
   }
 
@@ -822,16 +906,20 @@ const FinancialDashboard: React.FC = () => {
     ? savingsSeries.reduce((a, b) => a + b.savingsRate, 0) / savingsSeries.length
     : 0
   
-  const netWorthData = React.useMemo(() => {
-    return combinedNetWorthDF.map((r) => ({
-      month: dayjs(r.Month).format('YYYY-MM'),
-      'Total Liquid Assets': r.Type === 'Actual' ? r['Total Liquid Assets'] : null,
-      'Total Non-Liquid Assets': r.Type === 'Actual' ? r['Total Non-Liquid Assets'] : null,
-      'Total Debt': r.Type === 'Actual' ? r['Total Debt'] : null,
-      'Net Worth': r.Type === 'Actual' ? r['Net Worth'] : null,
-      'Projected Net Worth': r.Type === 'Projected' ? r['Net Worth'] : null,
+    const netWorthData = React.useMemo(() => {
+    // The chart data now comes from the dedicated chartDataDF state
+    return netWorthDF.map(row => ({
+      month: dayjs(row.Month).format('MMM YYYY'),
+      'Total Liquid Assets': row['Total Liquid Assets'],
+      'Total Non-Liquid Assets': row['Total Non-Liquid Assets'],
+      'Total Debt': row['Total Debt'],
+      'Net Worth': row['Net Worth'],
+      'Projected Total Liquid Assets': row['Projected Total Liquid Assets'],
+      'Projected Total Non-Liquid Assets': row['Projected Total Non-Liquid Assets'],
+      'Projected Total Debt': row['Projected Total Debt'],
+      'Projected Net Worth': row['Projected Net Worth'],
     }));
-  }, [combinedNetWorthDF]);
+  }, [netWorthDF]);
 
   const fiData = React.useMemo(() => {
     return fiProgressDF.map((r) => ({
@@ -886,7 +974,7 @@ const FinancialDashboard: React.FC = () => {
                   symbolForApi = `${apiTicker}.CC`;
               }
               
-              const endpoint = `https://financial-dashboard-19e9ldq4f-amitgalor18-2075s-projects.vercel.app/api/get-prices?ticker=${symbolForApi}&apiKey=${apiKey}`;
+              const endpoint = `https://financial-dashboard-los6ehmoo-amitgalor18-2075s-projects.vercel.app/api/get-prices?ticker=${symbolForApi}&apiKey=${apiKey}`;
               return fetch(endpoint).then(res => res.json());
           });
 
@@ -1047,39 +1135,42 @@ const FinancialDashboard: React.FC = () => {
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const file = e.target.files?.[0];
+  if (!file) return;
 
-    try {
-      const text = await file.text();
-      const importedState = JSON.parse(text);
+  try {
+    const text = await file.text();
+    const importedState = JSON.parse(text);
 
-      if (!importedState.data || !importedState.data.expensesTime || !importedState.data.netWorthDF) {
-        throw new Error("Invalid or outdated dashboard state file.");
-      }
-
-      const parseDates = (rows: any[], key: string) => 
-        rows.map(r => ({ ...r, [key]: new Date(r[key]) }));
-
-      // Set the main states directly from the file.
-      const importedNetWorth = parseDates(importedState.data.netWorthDF, 'Month');
-      setExpensesTime(parseDates(importedState.data.expensesTime, 'Month'));
-      setIncomeTime(parseDates(importedState.data.incomeTime, 'Month'));
-      setPortfolio(importedState.data.portfolio || []);
-      setNetWorthDF(importedNetWorth);
-      setExpenseSchema(importedState.data.expenseSchema || {expenses: [], income: []});
-      calculateProjections(importedNetWorth);
-
-      setFinanceFileName(importedState.data.financeFileName || 'Loaded from JSON');
-      setFireFileName(importedState.data.fireFileName || 'Loaded from JSON');
-
-      e.target.value = '';
-      alert("Dashboard state imported successfully!");
-
-    } catch (err: any) {
-      alert(`Error importing file: ${err.message}`);
+    if (!importedState.data || !importedState.data.expensesTime || !importedState.data.netWorthDF) {
+      throw new Error("Invalid or outdated dashboard state file.");
     }
-  };
+
+    const parseDates = (rows: any[], key: string) => 
+      rows.map(r => ({ ...r, [key]: new Date(r[key]) }));
+
+    // Set the main states directly from the file.
+    const importedNetWorth = parseDates(importedState.data.netWorthDF, 'Month').filter(r => r.Type !== 'Projected');
+    
+    setExpensesTime(parseDates(importedState.data.expensesTime, 'Month'));
+    setIncomeTime(parseDates(importedState.data.incomeTime, 'Month'));
+    setPortfolio(importedState.data.portfolio || []);
+    
+    // Calculate projections once with the imported actual data
+    const nextCombinedData = calculateProjections(importedNetWorth);
+    setNetWorthDF(nextCombinedData);
+    
+    setExpenseSchema(importedState.data.expenseSchema || {expenses: [], income: []});
+    setFinanceFileName(importedState.data.financeFileName || 'Loaded from JSON');
+    setFireFileName(importedState.data.fireFileName || 'Loaded from JSON');
+
+    e.target.value = '';
+    alert("Dashboard state imported successfully!");
+
+  } catch (err: any) {
+    alert(`Error importing file: ${err.message}`);
+  }
+};
   
   return (
       <div className="min-h-screen bg-gray-900 text-white">
@@ -1217,33 +1308,35 @@ const FinancialDashboard: React.FC = () => {
                 <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
                   <div className="flex justify-between items-center mb-6">
                     <h3 className="text-xl font-bold">Monthly Expenses Breakdown</h3>
-                    <select
-                      value={selectedMonth}
-                      onChange={(e) => setSelectedMonth(e.target.value)}
-                      className="bg-gray-700 text-white px-4 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-blue-500"
-                    >
-                      {[...new Set(expensesTime.map((r) => dayjs(r.Month).format('YYYY-MM')))]
-                        .sort()
-                        .map((m) => (
-                          <option key={m} value={m}>
-                            {m}
-                          </option>
-                        ))}
-                    </select>
-                    <button 
-                      onClick={() => {
-                        if (!selectedMonth) return;
-                        setEditingMonth(selectedMonth);
-                        setMonthlyItems({
-                          expenses: expensesTime.filter(r => dayjs(r.Month).format('YYYY-MM') === selectedMonth),
-                          income: incomeTime.filter(r => dayjs(r.Month).format('YYYY-MM') === selectedMonth),
-                        });
-                        setIsExpenseModalOpen(true);
-                      }}
-                      className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-500"
-                    >
-                      Edit This Month
-                    </button>
+                    <div className="flex items-center gap-4">
+                      <select
+                        value={selectedMonth}
+                        onChange={(e) => setSelectedMonth(e.target.value)}
+                        className="bg-gray-700 text-white px-4 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-blue-500"
+                      >
+                        {[...new Set(expensesTime.map((r) => dayjs(r.Month).format('YYYY-MM')))]
+                          .sort()
+                          .reverse() // Show newest months first
+                          .map((m) => (
+                            <option key={m} value={m}>
+                              {m}
+                            </option>
+                          ))}
+                      </select>
+                      <button 
+                        onClick={handleOpenEditMonthModal}
+                        className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-500"
+                      >
+                        Edit This Month
+                      </button>
+                      {/* ✅ NEW "Add Month" button */}
+                      <button 
+                        onClick={handleOpenAddMonthModal}
+                        className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-500"
+                      >
+                        Add Month
+                      </button>
+                    </div>
                   </div>
     
                   {expensesData.pieChartData.length === 0 ? (
@@ -1369,27 +1462,27 @@ const FinancialDashboard: React.FC = () => {
             )}
             {/* Net Worth Tab */}
             {activeTab === 'networth' && (
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold mb-6">Net Worth Growth</h3>
-                <button 
-                  onClick={() => {
-                    const monthToEdit = prompt("Enter month to edit (YYYY-MM):", dayjs().format('YYYY-MM'));
-                    if (monthToEdit) {
-                      const row = netWorthDF.find(r => dayjs(r.Month).format('YYYY-MM') === monthToEdit);
-                      if (row) {
-                        setEditingNetWorthRow(row);
-                        setIsNetWorthModalOpen(true);
-                      } else {
-                        alert("Month not found in data.");
-                      }
-                    }
-                  }}
-                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-500"
-                >
-                  Edit Month's Data
-                </button>
+              <div>
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className="text-xl font-bold">Net Worth Growth</h3>
+                  <div className="flex items-center gap-4">
+                    <button 
+                      onClick={handleOpenEditNetWorthModal}
+                      className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-500"
+                    >
+                      Edit Month
+                    </button>
+                    <button 
+                      onClick={handleOpenAddNetWorthModal}
+                      className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-500"
+                    >
+                      Add Month
+                    </button>
+                  </div>
+                </div>
+                {/* Chart container */}
                 {!haveNetWorth ? (
-                  <div className="text-gray-400">Load the net worth workbook.</div>
+                  <div className="text-gray-400 text-center py-16">Load the net worth workbook to view the chart.</div>
                 ) : (
                   <ResponsiveContainer width="100%" height={500}>
                     <LineChart data={netWorthData}>
@@ -1399,16 +1492,29 @@ const FinancialDashboard: React.FC = () => {
                       <Tooltip content={<CustomTooltip />} />
                       <Legend 
                         wrapperStyle={{ opacity: 0.8 }}
-                        formatter={(value) => 
-                          value === 'Net Worth' ? 'Net Worth (includes debt)' : value
-                        }
+                        formatter={(value) => {
+                          const legendMap: Record<string, string> = {
+                            'Net Worth': 'Net Worth (actual)',
+                            'Projected Net Worth': 'Net Worth (projected)',
+                            'Total Liquid Assets': 'Liquid Assets (actual)',
+                            'Projected Total Liquid Assets': 'Liquid Assets (projected)',
+                            'Total Non-Liquid Assets': 'Non-Liquid Assets (actual)',
+                            'Projected Total Non-Liquid Assets': 'Non-Liquid Assets (projected)',
+                            'Total Debt': 'Debt (actual)',
+                            'Projected Total Debt': 'Debt (projected)',
+                          };
+                          return legendMap[value] || value;
+                        }}
                       />
+                      
+                      {/* Actual data lines (solid) */}
                       <Line 
                         type="monotone" 
                         dataKey="Total Liquid Assets" 
                         stroke="#10B981" 
                         strokeWidth={2} 
                         dot={false}
+                        connectNulls={false}
                       />
                       <Line 
                         type="monotone" 
@@ -1416,21 +1522,52 @@ const FinancialDashboard: React.FC = () => {
                         stroke="#f5d60bff" 
                         strokeWidth={2} 
                         dot={false}
+                        connectNulls={false}
                       />
                       <Line 
                         type="monotone" 
                         dataKey="Total Debt" 
                         stroke="#EF4444" 
                         strokeWidth={2}
-                        dot={false} 
+                        dot={false}
+                        connectNulls={false}
                       />
                       <Line 
                         type="monotone" 
                         dataKey="Net Worth" 
                         stroke="#3B82F6" 
                         strokeWidth={3} 
-                        connectNulls
                         dot={false}
+                        connectNulls={false}
+                      />
+                      
+                      {/* Projected data lines (dashed) */}
+                      <Line 
+                        type="monotone" 
+                        dataKey="Projected Total Liquid Assets" 
+                        stroke="#10B981" 
+                        strokeWidth={2} 
+                        strokeDasharray="5 5"
+                        dot={false}
+                        connectNulls={true}
+                      />
+                      <Line 
+                        type="monotone" 
+                        dataKey="Projected Total Non-Liquid Assets" 
+                        stroke="#f5d60bff" 
+                        strokeWidth={2} 
+                        strokeDasharray="5 5"
+                        dot={false}
+                        connectNulls={true}
+                      />
+                      <Line 
+                        type="monotone" 
+                        dataKey="Projected Total Debt" 
+                        stroke="#EF4444" 
+                        strokeWidth={2}
+                        strokeDasharray="5 5"
+                        dot={false}
+                        connectNulls={true}
                       />
                       <Line 
                         type="monotone" 
@@ -1438,7 +1575,7 @@ const FinancialDashboard: React.FC = () => {
                         stroke="#3B82F6" 
                         strokeWidth={3} 
                         strokeDasharray="5 5"
-                        connectNulls 
+                        connectNulls={true}
                         dot={false}
                       />
                     </LineChart>
