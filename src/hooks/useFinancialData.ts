@@ -384,7 +384,7 @@ export const useFinancialData = () => {
                   symbolForApi = `${apiTicker}.CC`;
               }
               
-              const endpoint = `https://financial-dashboard-dygbnb6sz-amitgalor18-2075s-projects.vercel.app/api/get-prices?ticker=${symbolForApi}&apiKey=${apiKey}`;
+              const endpoint = `https://financial-dashboard-los6ehmoo-amitgalor18-2075s-projects.vercel.app/api/get-prices?ticker=${symbolForApi}&apiKey=${apiKey}`;
               return fetch(endpoint).then(res => res.json());
           });
 
@@ -471,8 +471,6 @@ export const useFinancialData = () => {
   };
 
   const handleSaveNetWorthChanges = (updatedRow: DetailedNetWorthRow) => {
-    logDataDifference("Comparing initial state with final state", netWorthDF, netWorthDF);
-    
     const totalLiquid = updatedRow.Cash + updatedRow.MMF + updatedRow.Bonds + updatedRow.Stocks + updatedRow.Hishtalmut + updatedRow.ProvFund + updatedRow.RealEstateInv + updatedRow.Crypto;
     const totalNonLiquid = updatedRow.Pension + updatedRow.Car + updatedRow.Residence + updatedRow.OtherNonLiquid;
     const totalDebt = updatedRow.Mortgage + updatedRow.Loans + updatedRow.CreditCardDebt;
@@ -484,19 +482,22 @@ export const useFinancialData = () => {
       'Total Debt': totalDebt, 'Net Worth': netWorth, Type: 'Actual',
     };
 
-    const currentActualData = netWorthDF.filter(row => row.Type !== 'Projected');
-    const monthExists = currentActualData.some(row => dayjs(row.Month).isSame(dayjs(finalRow.Month), 'month'));
+    setNetWorthDF(currentNetWorthDF => {
+      const currentActualData = currentNetWorthDF.filter(row => row.Type !== 'Projected');
+      const monthExists = currentActualData.some(row => dayjs(row.Month).isSame(dayjs(finalRow.Month), 'month'));
 
-    let nextActualData;
-    if (monthExists) {
-      nextActualData = currentActualData.map(row => dayjs(row.Month).isSame(dayjs(finalRow.Month), 'month') ? finalRow : row);
-    } else {
-      nextActualData = [...currentActualData, finalRow];
-    }
-    nextActualData.sort((a, b) => +new Date(a.Month) - +new Date(b.Month));
+      let nextActualData;
+      if (monthExists) {
+        nextActualData = currentActualData.map(row => dayjs(row.Month).isSame(dayjs(finalRow.Month), 'month') ? finalRow : row);
+      } else {
+        nextActualData = [...currentActualData, finalRow];
+      }
+      nextActualData.sort((a, b) => +new Date(a.Month) - +new Date(b.Month));
 
-    const newCombinedData = calculateProjections(nextActualData);
-    setNetWorthDF(newCombinedData);
+      const newCombinedData = calculateProjections(nextActualData);
+      logDataDifference("Net worth state updated", currentNetWorthDF, newCombinedData);
+      return newCombinedData;
+    });
 
     setIsNetWorthModalOpen(false);
     setEditingNetWorthRow(null);

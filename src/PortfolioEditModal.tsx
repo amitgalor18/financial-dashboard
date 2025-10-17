@@ -1,6 +1,6 @@
 // src/PortfolioEditModal.tsx
 import React, { useState, useEffect } from 'react';
-import type { PortfolioItem } from './lib/types';
+import type { PortfolioItem } from '../lib/types';
 
 interface Props {
   isOpen: boolean;
