@@ -1,33 +1,22 @@
 // src/PortfolioEditModal.tsx
 import React, { useState, useEffect } from 'react';
-
-// Define the shape of a portfolio item
-interface PortfolioItem {
-  ticker: string;
-  name: string;
-  qty: number;
-  category: string;
-  price?: number; // Price is optional as it's not edited here
-  value?: number;
-}
+import type { PortfolioItem } from './lib/types';
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   onSave: (item: PortfolioItem) => void;
-  itemData: PortfolioItem | null; // null when adding, object when editing
+  itemData: PortfolioItem | null;
 }
 
+const EMPTY_ITEM: PortfolioItem = { ticker: '', name: '', qty: 0, category: '', price: 0, value: 0 };
+
 export const PortfolioEditModal: React.FC<Props> = ({ isOpen, onClose, onSave, itemData }) => {
-  const [item, setItem] = useState<PortfolioItem>({ ticker: '', name: '', qty: 0, category: '' });
+  const [item, setItem] = useState<PortfolioItem>(EMPTY_ITEM);
 
   useEffect(() => {
-    // If itemData is provided, we are in "edit" mode
-    if (itemData) {
-      setItem(itemData);
-    } else {
-      // Otherwise, we are in "add" mode, reset the form
-      setItem({ ticker: '', name: '', qty: 0, category: '' });
+    if (isOpen) {
+      setItem(itemData || EMPTY_ITEM);
     }
   }, [itemData, isOpen]);
 

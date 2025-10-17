@@ -1,18 +1,35 @@
-// src/NetWorthEditModal.tsx
 import React, { useState, useEffect } from 'react';
 import dayjs from 'dayjs';
 
-// Re-use the DetailedNetWorthRow type definition (or import it if you move it to a types file)
+// Re-use the DetailedNetWorthRow type definition
 type DetailedNetWorthRow = {
   Month: Date;
-  Cash: number; MMF: number; Bonds: number; Stocks: number; Hishtalmut: number;
-  ProvFund: number; RealEstateInv: number; Crypto: number;
-  Pension: number; Car: number; Residence: number; OtherNonLiquid: number;
-  Mortgage: number; Loans: number; CreditCardDebt: number;
-  'Total Liquid Assets': number; 'Total Non-Liquid Assets': number;
-  'Total Debt': number; 'Net Worth': number;
+  Cash: number; 
+  MMF: number; 
+  Bonds: number; 
+  Stocks: number; 
+  Hishtalmut: number;
+  ProvFund: number; 
+  RealEstateInv: number; 
+  Crypto: number;
+  Pension: number; 
+  Car: number; 
+  Residence: number; 
+  OtherNonLiquid: number;
+  Mortgage: number; 
+  Loans: number; 
+  CreditCardDebt: number;
+  'Total Liquid Assets': number | null; 
+  'Total Non-Liquid Assets': number | null;
+  'Total Debt': number | null; 
+  'Net Worth': number | null;
+  // Projected fields for chart display
+  'Projected Total Liquid Assets'?: number | null;
+  'Projected Total Non-Liquid Assets'?: number | null;
+  'Projected Total Debt'?: number | null;
+  'Projected Net Worth'?: number | null;
+  Type?: 'Actual' | 'Projected';
 };
-
 interface Props {
   isOpen: boolean;
   onClose: () => void;
@@ -21,11 +38,14 @@ interface Props {
 }
 
 export const NetWorthEditModal: React.FC<Props> = ({ isOpen, onClose, onSave, rowData }) => {
-  const [data, setData] = useState<DetailedNetWorthRow | null>(rowData);
+  const [data, setData] = useState<DetailedNetWorthRow | null>(null);
 
   useEffect(() => {
-    setData(rowData);
-  }, [rowData]);
+    // When the modal opens with data, create a deep copy to edit safely
+    if (rowData) {
+        setData(JSON.parse(JSON.stringify(rowData)));
+    }
+  }, [rowData, isOpen]);
 
   if (!isOpen || !data) return null;
 
@@ -34,21 +54,7 @@ export const NetWorthEditModal: React.FC<Props> = ({ isOpen, onClose, onSave, ro
     setData(prev => prev ? { ...prev, [name]: parseFloat(value) || 0 } : null);
   };
   
-  const handleTotalChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    const numValue = parseFloat(value) || 0;
-    
-    const sumLiquid = data.Cash + data.MMF + data.Bonds + data.Stocks + data.Hishtalmut + data.ProvFund + data.RealEstateInv + data.Crypto;
-    
-    if (name === 'Total Liquid Assets' && numValue !== sumLiquid) {
-      if (!window.confirm(`Warning: The new total (${numValue.toLocaleString()}) does not match the sum of its components (${sumLiquid.toLocaleString()}). Do you want to proceed?`)) {
-        return; // User cancelled
-      }
-    }
-    // Similar checks can be added for Non-Liquid and Debt totals
-    
-    setData(prev => prev ? { ...prev, [name]: numValue } : null);
-  };
+  // ✅ FIX: The unused handleTotalChange function has been removed.
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,7 +67,12 @@ export const NetWorthEditModal: React.FC<Props> = ({ isOpen, onClose, onSave, ro
     <div key={name}>
       <label className="block text-sm font-medium text-gray-300">{label}</label>
       <input
-        type="number" step="any" name={name} value={data[name]} onChange={handleChange}
+        type="number"
+        step="any"
+        name={name}
+        // ✅ FIX: TypeScript error resolved. We access the value safely.
+        value={data[name] as number} 
+        onChange={handleChange}
         className="w-full mt-1 bg-gray-700 border border-gray-600 rounded-md p-2"
       />
     </div>
