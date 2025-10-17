@@ -384,7 +384,7 @@ export const useFinancialData = () => {
                   symbolForApi = `${apiTicker}.CC`;
               }
               
-              const endpoint = `https://financial-dashboard-los6ehmoo-amitgalor18-2075s-projects.vercel.app/api/get-prices?ticker=${symbolForApi}&apiKey=${apiKey}`;
+              const endpoint = `https://financial-dashboard-dygbnb6sz-amitgalor18-2075s-projects.vercel.app/api/get-prices?ticker=${symbolForApi}&apiKey=${apiKey}`;
               return fetch(endpoint).then(res => res.json());
           });
 
