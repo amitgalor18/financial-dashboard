@@ -63,7 +63,8 @@ const FinancialDashboard: React.FC = () => {
         });
     }, [incomeExpensesDF]);
     
-    const netWorthData = React.useMemo(() => netWorthDF.map(row => ({
+    const netWorthData = React.useMemo(() => {
+      const out = netWorthDF.map(row => ({
         month: dayjs(row.Month).format('MMM YYYY'),
         'Total Liquid Assets': row.Type === 'Actual' ? row['Total Liquid Assets'] : null,
         'Total Non-Liquid Assets': row.Type === 'Actual' ? row['Total Non-Liquid Assets'] : null,
@@ -73,7 +74,13 @@ const FinancialDashboard: React.FC = () => {
         'Projected Total Non-Liquid Assets': row['Projected Total Non-Liquid Assets'],
         'Projected Total Debt': row['Projected Total Debt'],
         'Projected Net Worth': row['Projected Net Worth'],
-    })), [netWorthDF]);
+      }));
+      // #region agent log
+      const projNonNull = out.filter(r => r['Projected Net Worth'] != null && !Number.isNaN(Number(r['Projected Net Worth']))).length;
+      fetch('http://127.0.0.1:7243/ingest/dd25555d-10f7-4c18-9556-f18f33aa0e3c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'FinancialDashboard.tsx:netWorthData',message:'Chart data',data:{netWorthDFLen:netWorthDF.length,outLen:out.length,projNonNull},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
+      return out;
+    }, [netWorthDF]);
 
     const fiData = React.useMemo(() => fiProgressDF.map((r) => ({
         month: dayjs(r.Month).format('YYYY-MM'),

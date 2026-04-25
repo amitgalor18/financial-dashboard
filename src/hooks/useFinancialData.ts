@@ -471,13 +471,18 @@ export const useFinancialData = () => {
   };
 
   const handleSaveNetWorthChanges = (updatedRow: DetailedNetWorthRow) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/dd25555d-10f7-4c18-9556-f18f33aa0e3c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'useFinancialData.ts:handleSaveNetWorthChanges',message:'Save entry',data:{monthType:typeof (updatedRow as any).Month,monthValue:(updatedRow as any).Month},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     const totalLiquid = updatedRow.Cash + updatedRow.MMF + updatedRow.Bonds + updatedRow.Stocks + updatedRow.Hishtalmut + updatedRow.ProvFund + updatedRow.RealEstateInv + updatedRow.Crypto;
     const totalNonLiquid = updatedRow.Pension + updatedRow.Car + updatedRow.Residence + updatedRow.OtherNonLiquid;
     const totalDebt = updatedRow.Mortgage + updatedRow.Loans + updatedRow.CreditCardDebt;
     const netWorth = totalLiquid + totalNonLiquid - totalDebt;
 
+    const monthDate = toDate(updatedRow.Month);
     const finalRow: DetailedNetWorthRow = {
       ...updatedRow,
+      Month: monthDate,
       'Total Liquid Assets': totalLiquid, 'Total Non-Liquid Assets': totalNonLiquid,
       'Total Debt': totalDebt, 'Net Worth': netWorth, Type: 'Actual',
     };
@@ -486,15 +491,23 @@ export const useFinancialData = () => {
       const currentActualData = currentNetWorthDF.filter(row => row.Type !== 'Projected');
       const monthExists = currentActualData.some(row => dayjs(row.Month).isSame(dayjs(finalRow.Month), 'month'));
 
-      let nextActualData;
+      let nextActualData: DetailedNetWorthRow[];
       if (monthExists) {
         nextActualData = currentActualData.map(row => dayjs(row.Month).isSame(dayjs(finalRow.Month), 'month') ? finalRow : row);
       } else {
         nextActualData = [...currentActualData, finalRow];
       }
       nextActualData.sort((a, b) => +new Date(a.Month) - +new Date(b.Month));
+      nextActualData = nextActualData.map((r) => ({ ...r, Month: r.Month instanceof Date ? r.Month : toDate(r.Month) }));
 
       const newCombinedData = calculateProjections(nextActualData);
+      // #region agent log
+      const projCount = newCombinedData.filter(r => r.Type === 'Projected').length;
+      const firstProj = newCombinedData.find(r => r.Type === 'Projected');
+      const firstProjVal = firstProj ? firstProj['Projected Net Worth'] : null;
+      const hasNaN = firstProjVal != null && Number.isNaN(Number(firstProjVal));
+      fetch('http://127.0.0.1:7243/ingest/dd25555d-10f7-4c18-9556-f18f33aa0e3c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'useFinancialData.ts:setNetWorthDF updater',message:'After calculateProjections',data:{currentLen:currentNetWorthDF.length,currentActualLen:currentActualData.length,nextActualLen:nextActualData.length,combinedLen:newCombinedData.length,projCount,firstProjVal,hasNaN},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
       logDataDifference("Net worth state updated", currentNetWorthDF, newCombinedData);
       return newCombinedData;
     });

@@ -67,11 +67,17 @@ export const calculateProjections = (historicalData: DetailedNetWorthRow[]): Det
       return [];
     }
     const actualData = historicalData.filter(r => r.Type !== 'Projected');
-    
+    // #region agent log
+    const firstMonth = actualData[0]?.Month;
+    const firstMonthType = typeof firstMonth;
     const ord = (d: Date) => Math.floor(+d / (24 * 3600 * 1000));
     const recent = actualData.slice(-24).filter((r) => r['Net Worth'] && r['Net Worth'] > 0);
     const X = recent.map((r) => ord(r.Month));
     const Y = recent.map((r) => Math.log(r['Net Worth'] as number));
+    const xHasNaN = X.some((x) => Number.isNaN(x));
+    const yHasNaN = Y.some((y) => Number.isNaN(y));
+    fetch('http://127.0.0.1:7243/ingest/dd25555d-10f7-4c18-9556-f18f33aa0e3c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'utils.ts:calculateProjections',message:'Regression inputs',data:{actualLen:actualData.length,recentLen:recent.length,firstMonthType,xHasNaN,yHasNaN,Xsample:X.slice(0,3)},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     const n = X.length;
     let slope = 0, intercept = 0;
 
@@ -85,6 +91,7 @@ export const calculateProjections = (historicalData: DetailedNetWorthRow[]): Det
     }
 
     const last = actualData.at(-1)!;
+    const lastDebt = last['Total Debt'] ?? 0;
     const totalAssets = ((last['Total Liquid Assets'] || 0) + (last['Total Non-Liquid Assets'] || 0)) || 1;
     const pL = (last['Total Liquid Assets'] || 0) / totalAssets;
     const pN = 1 - pL;
@@ -94,8 +101,12 @@ export const calculateProjections = (historicalData: DetailedNetWorthRow[]): Det
       const m = dayjs(last.Month).add(i, 'month').startOf('month').toDate();
       const x = ord(m);
       const netWorth = Math.exp(intercept + slope * x);
-      const projectedLiquid = netWorth * pL;
-      const projectedNonLiquid = netWorth * pN;
+      // #region agent log
+      if (i === 1) fetch('http://127.0.0.1:7243/ingest/dd25555d-10f7-4c18-9556-f18f33aa0e3c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'utils.ts:calculateProjections',message:'First projected value',data:{slope,intercept,firstProjNetWorth:netWorth,valueIsNaN:Number.isNaN(netWorth)},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
+      const totalProjectedAssets = netWorth + lastDebt;
+      const projectedLiquid = totalProjectedAssets * pL;
+      const projectedNonLiquid = totalProjectedAssets * pN;
       
       future.push({
         Month: m,
@@ -106,7 +117,7 @@ export const calculateProjections = (historicalData: DetailedNetWorthRow[]): Det
         'Projected Net Worth': netWorth,
         'Projected Total Liquid Assets': projectedLiquid,
         'Projected Total Non-Liquid Assets': projectedNonLiquid,
-        'Projected Total Debt': 0,
+        'Projected Total Debt': lastDebt,
         Type: 'Projected',
         Cash: 0, MMF: 0, Bonds: 0, Stocks: 0, Hishtalmut: 0, ProvFund: 0,
         RealEstateInv: 0, Crypto: 0, Pension: 0, Car: 0, Residence: 0,
