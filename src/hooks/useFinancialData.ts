@@ -20,11 +20,11 @@ import {
 
 // Maps your spreadsheet tickers (keys) to the correct API tickers (values).
 const tickerApiMap: Record<string, string> = {
-    'ISFF301': 'iSFF301.TA', 'ISFF702': 'ISFF702.TA', 'ISFF101': 'iSFF101.TA',
+    'ISFF301': 'iSFF301.TA', 'ISFF702': 'IS-FF702.TA', 'ISFF101': 'iSFF101.TA',
     'ISFF701': 'IS-FF701.TA', 'ISFF505': 'ISFF505.TA', 'ISFF102': 'IS-FF102.TA',
     'INFF1': 'IN-FF1.TA', 'INFF7': 'IN-FF7.TA', 'TEVA': 'TEVA.TA',
     'BTC': 'BTC-USD', 'NVDA': 'NVDA', 'AAPL': 'AAPL', 'MSFT': 'MSFT',
-    'GOOGL': 'GOOGL', 'AMZN': 'AMZN', 'TSLA': 'TSLA', 'META': 'META',
+    'GOOGL': 'GOOGL', 'AMZN': 'AMZN', 'TSLA': 'TSLA', 'META': 'META', 'CSCO': 'CSCO',
     'VADFX': 'VADFX', 'VBISX': 'VBISX', 'ILS=X': 'ILS=X',
 };
 
@@ -56,7 +56,7 @@ export const useFinancialData = () => {
 
   // General & API State
   const [fiProgressDF, setFiProgressDF] = React.useState<Row[]>([]);
-  const [activeTab, setActiveTab] = React.useState<'overview' | 'expenses' | 'savings' | 'networth' | 'portfolio' | 'fire'>('overview');
+  const [activeTab, setActiveTab] = React.useState<'overview' | 'expenses' | 'trends' | 'savings' | 'networth' | 'portfolio' | 'fire'>('overview');
   const [selectedMonth, setSelectedMonth] = React.useState<string>('');
   const [financeFileName, setFinanceFileName] = React.useState<string>('');
   const [fireFileName, setFireFileName] = React.useState<string>('');
@@ -650,41 +650,83 @@ export const useFinancialData = () => {
     URL.revokeObjectURL(url);
   };
 
+  const applyImportedState = React.useCallback((importedState: any, sourceLabel: string) => {
+    if (!importedState.data || !importedState.data.expensesTime || !importedState.data.netWorthDF) {
+      throw new Error("Invalid or outdated dashboard state file.");
+    }
+
+    const parseDates = (rows: any[], key: string) =>
+      rows.map(r => ({ ...r, [key]: new Date(r[key]) }));
+
+    const importedNetWorth = parseDates(importedState.data.netWorthDF, 'Month').filter((r: DetailedNetWorthRow) => r.Type !== 'Projected');
+
+    setExpensesTime(parseDates(importedState.data.expensesTime, 'Month'));
+    setIncomeTime(parseDates(importedState.data.incomeTime, 'Month'));
+    setPortfolio(importedState.data.portfolio || []);
+
+    const nextCombinedData = calculateProjections(importedNetWorth);
+    setNetWorthDF(nextCombinedData);
+
+    setExpenseSchema(importedState.data.expenseSchema || { expenses: [], income: [] });
+    setFinanceFileName(importedState.data.financeFileName || sourceLabel);
+    setFireFileName(importedState.data.fireFileName || sourceLabel);
+  }, []);
+
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
       const text = await file.text();
-      const importedState = JSON.parse(text);
-
-      if (!importedState.data || !importedState.data.expensesTime || !importedState.data.netWorthDF) {
-        throw new Error("Invalid or outdated dashboard state file.");
-      }
-
-      const parseDates = (rows: any[], key: string) =>
-        rows.map(r => ({ ...r, [key]: new Date(r[key]) }));
-
-      const importedNetWorth = parseDates(importedState.data.netWorthDF, 'Month').filter((r: DetailedNetWorthRow) => r.Type !== 'Projected');
-      
-      setExpensesTime(parseDates(importedState.data.expensesTime, 'Month'));
-      setIncomeTime(parseDates(importedState.data.incomeTime, 'Month'));
-      setPortfolio(importedState.data.portfolio || []);
-      
-      const nextCombinedData = calculateProjections(importedNetWorth);
-      setNetWorthDF(nextCombinedData);
-      
-      setExpenseSchema(importedState.data.expenseSchema || { expenses: [], income: [] });
-      setFinanceFileName(importedState.data.financeFileName || 'Loaded from JSON');
-      setFireFileName(importedState.data.fireFileName || 'Loaded from JSON');
-
+      applyImportedState(JSON.parse(text), 'Loaded from JSON');
       e.target.value = '';
       alert("Dashboard state imported successfully!");
-
     } catch (err: any) {
       alert(`Error importing file: ${err.message}`);
     }
   };
+
+  const loadDemoData = async () => {
+    try {
+      const res = await fetch('/demo_data.json');
+      if (!res.ok) throw new Error('Demo data file not found.');
+      applyImportedState(await res.json(), 'Demo data');
+    } catch (err: any) {
+      alert(`Error loading demo data: ${err.message}`);
+    }
+  };
+
+  /** ---------- AUTO-SAVE TO LOCALSTORAGE ---------- */
+  const restoredRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    try {
+      const saved = localStorage.getItem('dashboardState');
+      if (saved) applyImportedState(JSON.parse(saved), 'Restored from auto-save');
+    } catch (e) {
+      console.warn('Failed to restore auto-saved state:', e);
+    }
+  }, [applyImportedState]);
+
+  React.useEffect(() => {
+    // Don't overwrite a previous save with an empty session
+    if (!expensesTime.length && !netWorthDF.length) return;
+    const timer = setTimeout(() => {
+      try {
+        const state = {
+          version: 2.1,
+          exportedAt: new Date().toISOString(),
+          data: { expensesTime, incomeTime, portfolio, netWorthDF, expenseSchema, financeFileName, fireFileName },
+        };
+        localStorage.setItem('dashboardState', JSON.stringify(state));
+      } catch (e) {
+        console.warn('Auto-save failed (state may be too large for localStorage):', e);
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [expensesTime, incomeTime, portfolio, netWorthDF, expenseSchema, financeFileName, fireFileName]);
 
   return {
     // State
@@ -703,6 +745,7 @@ export const useFinancialData = () => {
     fetchLivePrices, handleSaveExpenseChanges, handleSavePortfolioItem, handleRemovePortfolioItem,
     handleSaveNetWorthChanges, handleOpenEditMonthModal, handleOpenAddMonthModal,
     handleOpenEditNetWorthModal, handleOpenAddNetWorthModal, handleExport, handleImport,
+    loadDemoData,
   };
 };
 

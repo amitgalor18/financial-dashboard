@@ -1,6 +1,6 @@
 import React from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { DollarSign, Calculator, TrendingUp, Wallet } from 'lucide-react';
+import { DollarSign, Calculator, TrendingUp, Wallet, Sparkles } from 'lucide-react';
 import { StatCard } from '../components/StatCard';
 import { CustomTooltip } from '../components/CustomTooltips';
 
@@ -9,13 +9,26 @@ interface OverviewTabProps {
     netWorthData: any[];
     haveFinance: boolean;
     haveNetWorth: boolean;
+    loadDemoData: () => void;
 }
 
-export const OverviewTab: React.FC<OverviewTabProps> = ({ monthlyData, netWorthData, haveFinance, haveNetWorth }) => {
+export const OverviewTab: React.FC<OverviewTabProps> = ({ monthlyData, netWorthData, haveFinance, haveNetWorth, loadDemoData }) => {
     if (!haveFinance || !haveNetWorth) {
         return (
-            <div className="bg-gray-800 rounded-xl p-6 border border-gray-700 text-gray-300">
-                Load both Excel files above to populate charts.
+            <div className="bg-gray-800 rounded-xl p-10 border border-gray-700 text-center space-y-4">
+                <h3 className="text-2xl font-bold text-white">Welcome to the Finance Dashboard</h3>
+                <p className="text-gray-300 max-w-xl mx-auto">
+                    Load your expenses and net worth Excel files above (or import a saved JSON snapshot)
+                    to populate the charts. Just curious? Try it with sample data:
+                </p>
+                <button
+                    onClick={loadDemoData}
+                    className="inline-flex items-center gap-2 px-6 py-3 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-500 transition-colors"
+                >
+                    <Sparkles size={16} />
+                    Load Demo Data
+                </button>
+                <p className="text-gray-500 text-sm">Demo data is fake and only lives in your browser.</p>
             </div>
         );
     }

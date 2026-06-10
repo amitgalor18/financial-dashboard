@@ -12,6 +12,7 @@ import { Header } from './components/Header';
 import { DashboardTabs } from './components/DashboardTabs';
 import { OverviewTab } from './tabs/OverviewTab';
 import { ExpensesTab } from './tabs/ExpensesTab';
+import { ExpenseTrendsTab } from './tabs/ExpenseTrendsTab';
 import { SavingsTab } from './tabs/SavingsTab';
 import { NetWorthTab } from './tabs/NetWorthTab';
 import { PortfolioTab } from './tabs/PortfolioTab';
@@ -34,7 +35,7 @@ const FinancialDashboard: React.FC = () => {
         handleSavePortfolioItem, handleRemovePortfolioItem,
         handleSaveNetWorthChanges, handleOpenEditMonthModal,
         handleOpenAddMonthModal, handleOpenEditNetWorthModal,
-        handleOpenAddNetWorthModal, handleExport, handleImport,
+        handleOpenAddNetWorthModal,         handleExport, handleImport, loadDemoData,
         setIsExpenseModalOpen, setIsNetWorthModalOpen, setIsPortfolioModalOpen,
         setEditingPortfolioItem,
     } = useFinancialData();
@@ -124,9 +125,11 @@ const FinancialDashboard: React.FC = () => {
     const renderTabContent = () => {
         switch (activeTab) {
             case 'overview':
-                return <OverviewTab monthlyData={monthlyData} netWorthData={netWorthData} haveFinance={haveFinance} haveNetWorth={haveNetWorth} />;
+                return <OverviewTab monthlyData={monthlyData} netWorthData={netWorthData} haveFinance={haveFinance} haveNetWorth={haveNetWorth} loadDemoData={loadDemoData} />;
             case 'expenses':
                 return <ExpensesTab expensesTime={expensesTime} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} handleOpenEditMonthModal={handleOpenEditMonthModal} handleOpenAddMonthModal={handleOpenAddMonthModal} />;
+            case 'trends':
+                return <ExpenseTrendsTab expensesTime={expensesTime} />;
             case 'savings':
                 return <SavingsTab savingsSeries={savingsSeries} totalCumulative={totalCumulative} avgMonthly={avgMonthly} avgSavingsRate={avgSavingsRate} />;
             case 'networth':
