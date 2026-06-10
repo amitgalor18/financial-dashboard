@@ -20,11 +20,11 @@ import {
 
 // Maps your spreadsheet tickers (keys) to the correct API tickers (values).
 const tickerApiMap: Record<string, string> = {
-    'ISFF301': 'iSFF301.TA', 'ISFF702': 'ISFF702.TA', 'ISFF101': 'iSFF101.TA',
+    'ISFF301': 'iSFF301.TA', 'ISFF702': 'IS-FF702.TA', 'ISFF101': 'iSFF101.TA',
     'ISFF701': 'IS-FF701.TA', 'ISFF505': 'ISFF505.TA', 'ISFF102': 'IS-FF102.TA',
     'INFF1': 'IN-FF1.TA', 'INFF7': 'IN-FF7.TA', 'TEVA': 'TEVA.TA',
     'BTC': 'BTC-USD', 'NVDA': 'NVDA', 'AAPL': 'AAPL', 'MSFT': 'MSFT',
-    'GOOGL': 'GOOGL', 'AMZN': 'AMZN', 'TSLA': 'TSLA', 'META': 'META',
+    'GOOGL': 'GOOGL', 'AMZN': 'AMZN', 'TSLA': 'TSLA', 'META': 'META', 'CSCO': 'CSCO',
     'VADFX': 'VADFX', 'VBISX': 'VBISX', 'ILS=X': 'ILS=X',
 };
 
@@ -56,7 +56,7 @@ export const useFinancialData = () => {
 
   // General & API State
   const [fiProgressDF, setFiProgressDF] = React.useState<Row[]>([]);
-  const [activeTab, setActiveTab] = React.useState<'overview' | 'expenses' | 'savings' | 'networth' | 'portfolio' | 'fire'>('overview');
+  const [activeTab, setActiveTab] = React.useState<'overview' | 'expenses' | 'trends' | 'savings' | 'networth' | 'portfolio' | 'fire'>('overview');
   const [selectedMonth, setSelectedMonth] = React.useState<string>('');
   const [financeFileName, setFinanceFileName] = React.useState<string>('');
   const [fireFileName, setFireFileName] = React.useState<string>('');
@@ -384,7 +384,7 @@ export const useFinancialData = () => {
                   symbolForApi = `${apiTicker}.CC`;
               }
               
-              const endpoint = `https://financial-dashboard-dygbnb6sz-amitgalor18-2075s-projects.vercel.app/api/get-prices?ticker=${symbolForApi}&apiKey=${apiKey}`;
+              const endpoint = `https://financial-dashboard-los6ehmoo-amitgalor18-2075s-projects.vercel.app/api/get-prices?ticker=${symbolForApi}&apiKey=${apiKey}`;
               return fetch(endpoint).then(res => res.json());
           });
 
@@ -471,32 +471,46 @@ export const useFinancialData = () => {
   };
 
   const handleSaveNetWorthChanges = (updatedRow: DetailedNetWorthRow) => {
-    logDataDifference("Comparing initial state with final state", netWorthDF, netWorthDF);
-    
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/dd25555d-10f7-4c18-9556-f18f33aa0e3c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'useFinancialData.ts:handleSaveNetWorthChanges',message:'Save entry',data:{monthType:typeof (updatedRow as any).Month,monthValue:(updatedRow as any).Month},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     const totalLiquid = updatedRow.Cash + updatedRow.MMF + updatedRow.Bonds + updatedRow.Stocks + updatedRow.Hishtalmut + updatedRow.ProvFund + updatedRow.RealEstateInv + updatedRow.Crypto;
     const totalNonLiquid = updatedRow.Pension + updatedRow.Car + updatedRow.Residence + updatedRow.OtherNonLiquid;
     const totalDebt = updatedRow.Mortgage + updatedRow.Loans + updatedRow.CreditCardDebt;
     const netWorth = totalLiquid + totalNonLiquid - totalDebt;
 
+    const monthDate = toDate(updatedRow.Month);
     const finalRow: DetailedNetWorthRow = {
       ...updatedRow,
+      Month: monthDate,
       'Total Liquid Assets': totalLiquid, 'Total Non-Liquid Assets': totalNonLiquid,
       'Total Debt': totalDebt, 'Net Worth': netWorth, Type: 'Actual',
     };
 
-    const currentActualData = netWorthDF.filter(row => row.Type !== 'Projected');
-    const monthExists = currentActualData.some(row => dayjs(row.Month).isSame(dayjs(finalRow.Month), 'month'));
+    setNetWorthDF(currentNetWorthDF => {
+      const currentActualData = currentNetWorthDF.filter(row => row.Type !== 'Projected');
+      const monthExists = currentActualData.some(row => dayjs(row.Month).isSame(dayjs(finalRow.Month), 'month'));
 
-    let nextActualData;
-    if (monthExists) {
-      nextActualData = currentActualData.map(row => dayjs(row.Month).isSame(dayjs(finalRow.Month), 'month') ? finalRow : row);
-    } else {
-      nextActualData = [...currentActualData, finalRow];
-    }
-    nextActualData.sort((a, b) => +new Date(a.Month) - +new Date(b.Month));
+      let nextActualData: DetailedNetWorthRow[];
+      if (monthExists) {
+        nextActualData = currentActualData.map(row => dayjs(row.Month).isSame(dayjs(finalRow.Month), 'month') ? finalRow : row);
+      } else {
+        nextActualData = [...currentActualData, finalRow];
+      }
+      nextActualData.sort((a, b) => +new Date(a.Month) - +new Date(b.Month));
+      nextActualData = nextActualData.map((r) => ({ ...r, Month: r.Month instanceof Date ? r.Month : toDate(r.Month) }));
 
-    const newCombinedData = calculateProjections(nextActualData);
-    setNetWorthDF(newCombinedData);
+      const newCombinedData = calculateProjections(nextActualData);
+      // #region agent log
+      const projCount = newCombinedData.filter(r => r.Type === 'Projected').length;
+      const firstProj = newCombinedData.find(r => r.Type === 'Projected');
+      const firstProjVal = firstProj ? firstProj['Projected Net Worth'] : null;
+      const hasNaN = firstProjVal != null && Number.isNaN(Number(firstProjVal));
+      fetch('http://127.0.0.1:7243/ingest/dd25555d-10f7-4c18-9556-f18f33aa0e3c',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'useFinancialData.ts:setNetWorthDF updater',message:'After calculateProjections',data:{currentLen:currentNetWorthDF.length,currentActualLen:currentActualData.length,nextActualLen:nextActualData.length,combinedLen:newCombinedData.length,projCount,firstProjVal,hasNaN},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
+      logDataDifference("Net worth state updated", currentNetWorthDF, newCombinedData);
+      return newCombinedData;
+    });
 
     setIsNetWorthModalOpen(false);
     setEditingNetWorthRow(null);
@@ -636,41 +650,83 @@ export const useFinancialData = () => {
     URL.revokeObjectURL(url);
   };
 
+  const applyImportedState = React.useCallback((importedState: any, sourceLabel: string) => {
+    if (!importedState.data || !importedState.data.expensesTime || !importedState.data.netWorthDF) {
+      throw new Error("Invalid or outdated dashboard state file.");
+    }
+
+    const parseDates = (rows: any[], key: string) =>
+      rows.map(r => ({ ...r, [key]: new Date(r[key]) }));
+
+    const importedNetWorth = parseDates(importedState.data.netWorthDF, 'Month').filter((r: DetailedNetWorthRow) => r.Type !== 'Projected');
+
+    setExpensesTime(parseDates(importedState.data.expensesTime, 'Month'));
+    setIncomeTime(parseDates(importedState.data.incomeTime, 'Month'));
+    setPortfolio(importedState.data.portfolio || []);
+
+    const nextCombinedData = calculateProjections(importedNetWorth);
+    setNetWorthDF(nextCombinedData);
+
+    setExpenseSchema(importedState.data.expenseSchema || { expenses: [], income: [] });
+    setFinanceFileName(importedState.data.financeFileName || sourceLabel);
+    setFireFileName(importedState.data.fireFileName || sourceLabel);
+  }, []);
+
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
       const text = await file.text();
-      const importedState = JSON.parse(text);
-
-      if (!importedState.data || !importedState.data.expensesTime || !importedState.data.netWorthDF) {
-        throw new Error("Invalid or outdated dashboard state file.");
-      }
-
-      const parseDates = (rows: any[], key: string) =>
-        rows.map(r => ({ ...r, [key]: new Date(r[key]) }));
-
-      const importedNetWorth = parseDates(importedState.data.netWorthDF, 'Month').filter((r: DetailedNetWorthRow) => r.Type !== 'Projected');
-      
-      setExpensesTime(parseDates(importedState.data.expensesTime, 'Month'));
-      setIncomeTime(parseDates(importedState.data.incomeTime, 'Month'));
-      setPortfolio(importedState.data.portfolio || []);
-      
-      const nextCombinedData = calculateProjections(importedNetWorth);
-      setNetWorthDF(nextCombinedData);
-      
-      setExpenseSchema(importedState.data.expenseSchema || { expenses: [], income: [] });
-      setFinanceFileName(importedState.data.financeFileName || 'Loaded from JSON');
-      setFireFileName(importedState.data.fireFileName || 'Loaded from JSON');
-
+      applyImportedState(JSON.parse(text), 'Loaded from JSON');
       e.target.value = '';
       alert("Dashboard state imported successfully!");
-
     } catch (err: any) {
       alert(`Error importing file: ${err.message}`);
     }
   };
+
+  const loadDemoData = async () => {
+    try {
+      const res = await fetch('/demo_data.json');
+      if (!res.ok) throw new Error('Demo data file not found.');
+      applyImportedState(await res.json(), 'Demo data');
+    } catch (err: any) {
+      alert(`Error loading demo data: ${err.message}`);
+    }
+  };
+
+  /** ---------- AUTO-SAVE TO LOCALSTORAGE ---------- */
+  const restoredRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    try {
+      const saved = localStorage.getItem('dashboardState');
+      if (saved) applyImportedState(JSON.parse(saved), 'Restored from auto-save');
+    } catch (e) {
+      console.warn('Failed to restore auto-saved state:', e);
+    }
+  }, [applyImportedState]);
+
+  React.useEffect(() => {
+    // Don't overwrite a previous save with an empty session
+    if (!expensesTime.length && !netWorthDF.length) return;
+    const timer = setTimeout(() => {
+      try {
+        const state = {
+          version: 2.1,
+          exportedAt: new Date().toISOString(),
+          data: { expensesTime, incomeTime, portfolio, netWorthDF, expenseSchema, financeFileName, fireFileName },
+        };
+        localStorage.setItem('dashboardState', JSON.stringify(state));
+      } catch (e) {
+        console.warn('Auto-save failed (state may be too large for localStorage):', e);
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [expensesTime, incomeTime, portfolio, netWorthDF, expenseSchema, financeFileName, fireFileName]);
 
   return {
     // State
@@ -689,6 +745,7 @@ export const useFinancialData = () => {
     fetchLivePrices, handleSaveExpenseChanges, handleSavePortfolioItem, handleRemovePortfolioItem,
     handleSaveNetWorthChanges, handleOpenEditMonthModal, handleOpenAddMonthModal,
     handleOpenEditNetWorthModal, handleOpenAddNetWorthModal, handleExport, handleImport,
+    loadDemoData,
   };
 };
 

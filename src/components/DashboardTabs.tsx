@@ -1,8 +1,8 @@
 import React from 'react';
-import { TrendingUp, DollarSign, BarChart3, Target, Wallet, PieChart as PieIcon } from 'lucide-react';
+import { TrendingUp, DollarSign, BarChart3, Target, Wallet, PieChart as PieIcon, AreaChart as AreaIcon } from 'lucide-react';
 import type { LucideProps } from 'lucide-react';
 
-type TabId = 'overview' | 'expenses' | 'savings' | 'networth' | 'portfolio' | 'fire';
+type TabId = 'overview' | 'expenses' | 'trends' | 'savings' | 'networth' | 'portfolio' | 'fire';
 
 interface TabButtonProps {
     id: TabId;
@@ -33,6 +33,7 @@ export const DashboardTabs: React.FC<DashboardTabsProps> = ({ activeTab, setActi
     const tabs: { id: TabId; label: string; icon: React.FC<LucideProps> }[] = [
         { id: 'overview', label: 'Overview', icon: DollarSign },
         { id: 'expenses', label: 'Expenses', icon: PieIcon },
+        { id: 'trends', label: 'Expense Trends', icon: AreaIcon },
         { id: 'savings', label: 'Savings', icon: TrendingUp },
         { id: 'networth', label: 'Net Worth', icon: Wallet },
         { id: 'portfolio', label: 'Portfolio', icon: BarChart3 },

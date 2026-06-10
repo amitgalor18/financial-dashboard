@@ -1,8 +1,10 @@
 import React from 'react';
 import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import dayjs from 'dayjs';
 import type { SeriesRow } from '../lib/types';
 import { PieTooltip } from '../components/CustomTooltips';
+import { getCategoryColor } from '../lib/categoryColors';
 
 interface ExpensesTabProps {
     expensesTime: SeriesRow[];
@@ -20,37 +22,50 @@ export const ExpensesTab: React.FC<ExpensesTabProps> = ({
     handleOpenEditMonthModal 
 }) => {
     
+    const availableMonths = React.useMemo(() =>
+        [...new Set(expensesTime.map((r) => dayjs(r.Month).format('YYYY-MM')))].sort(),
+    [expensesTime]);
+
+    const monthIdx = availableMonths.indexOf(selectedMonth);
+    const prevMonth = monthIdx > 0 ? availableMonths[monthIdx - 1] : null;
+    const nextMonth = monthIdx >= 0 && monthIdx < availableMonths.length - 1 ? availableMonths[monthIdx + 1] : null;
+
     const expensesData = React.useMemo(() => {
         if (!selectedMonth) {
             return { pieChartData: [], listViewData: [] };
         }
-        const monthRows = expensesTime.filter((r) => dayjs(r.Month).format('YYYY-MM') === selectedMonth && r.Amount > 0);
 
-        const grouped = new Map<string, { total: number; items: { expense: string; amount: number }[] }>();
-        for (const r of monthRows) {
-            const subCat = r['תת-קטגוריה'] ?? 'Uncategorized';
-            if (!grouped.has(subCat)) {
-                grouped.set(subCat, { total: 0, items: [] });
+        const groupMonth = (month: string) => {
+            const rows = expensesTime.filter((r) => dayjs(r.Month).format('YYYY-MM') === month && r.Amount > 0);
+            const grouped = new Map<string, { total: number; items: { expense: string; amount: number }[] }>();
+            for (const r of rows) {
+                const subCat = r['תת-קטגוריה'] ?? 'Uncategorized';
+                if (!grouped.has(subCat)) {
+                    grouped.set(subCat, { total: 0, items: [] });
+                }
+                const group = grouped.get(subCat)!;
+                group.total += r.Amount;
+                group.items.push({ expense: r['הוצאות']!, amount: r.Amount });
             }
-            const group = grouped.get(subCat)!;
-            group.total += r.Amount;
-            group.items.push({ expense: r['הוצאות']!, amount: r.Amount });
-        }
+            return grouped;
+        };
 
-        const palette = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FECA57', '#FF9FF3', '#54A0FF', '#F59E0B', '#34D399'];
-        
-        const pieChartData = [...grouped.entries()].map(([category, data], i) => ({
+        const grouped = groupMonth(selectedMonth);
+        const prevGrouped = prevMonth ? groupMonth(prevMonth) : null;
+
+        const pieChartData = [...grouped.entries()].map(([category, data]) => ({
             category,
             amount: data.total,
-            color: palette[i % palette.length]
+            color: getCategoryColor(category)
         }));
-        
+
         const listViewData = [...grouped.entries()].map(([subCategory, data]) => ({
-            subCategory, ...data
+            subCategory, ...data,
+            delta: prevGrouped ? data.total - (prevGrouped.get(subCategory)?.total ?? 0) : null,
         })).sort((a, b) => b.total - a.total);
 
         return { pieChartData, listViewData };
-    }, [expensesTime, selectedMonth]);
+    }, [expensesTime, selectedMonth, prevMonth]);
 
     return (
         <div className="space-y-8">
@@ -58,17 +73,31 @@ export const ExpensesTab: React.FC<ExpensesTabProps> = ({
                 <div className="flex justify-between items-center mb-6">
                     <h3 className="text-xl font-bold">Monthly Expenses Breakdown</h3>
                     <div className="flex items-center gap-4">
-                        <select
-                            value={selectedMonth}
-                            onChange={(e) => setSelectedMonth(e.target.value)}
-                            className="bg-gray-700 text-white px-4 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-blue-500"
-                        >
-                            {[...new Set(expensesTime.map((r) => dayjs(r.Month).format('YYYY-MM')))]
-                                .sort()
-                                .reverse()
-                                .map((m) => <option key={m} value={m}>{m}</option>
-                            )}
-                        </select>
+                        <div className="flex items-center gap-1">
+                            <button
+                                onClick={() => prevMonth && setSelectedMonth(prevMonth)}
+                                disabled={!prevMonth}
+                                title="Previous month"
+                                className="p-2 rounded-lg bg-gray-700 border border-gray-600 text-white hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                <ChevronLeft size={18} />
+                            </button>
+                            <select
+                                value={selectedMonth}
+                                onChange={(e) => setSelectedMonth(e.target.value)}
+                                className="bg-gray-700 text-white px-4 py-2 rounded-lg border border-gray-600 focus:outline-none focus:border-blue-500"
+                            >
+                                {availableMonths.slice().reverse().map((m) => <option key={m} value={m}>{m}</option>)}
+                            </select>
+                            <button
+                                onClick={() => nextMonth && setSelectedMonth(nextMonth)}
+                                disabled={!nextMonth}
+                                title="Next month"
+                                className="p-2 rounded-lg bg-gray-700 border border-gray-600 text-white hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                                <ChevronRight size={18} />
+                            </button>
+                        </div>
                         <button onClick={handleOpenEditMonthModal} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-500">
                             Edit This Month
                         </button>
@@ -105,10 +134,20 @@ export const ExpensesTab: React.FC<ExpensesTabProps> = ({
                                 <div key={group.subCategory} className="p-3 bg-gray-700 rounded-lg">
                                     <div className="flex items-center justify-between mb-2">
                                         <div className="flex items-center">
-                                            <div className="w-4 h-4 rounded-full mr-3" style={{ backgroundColor: expensesData.pieChartData.find(p => p.category === group.subCategory)?.color }} />
+                                            <div className="w-4 h-4 rounded-full mr-3" style={{ backgroundColor: getCategoryColor(group.subCategory) }} />
                                             <span className="font-semibold text-white">{group.subCategory}</span>
                                         </div>
-                                        <span className="text-white font-bold">₪{Math.round(group.total).toLocaleString()}</span>
+                                        <div className="flex items-center gap-3">
+                                            {group.delta != null && Math.round(Math.abs(group.delta)) > 0 && (
+                                                <span
+                                                    title={`vs. ${prevMonth}`}
+                                                    className={`text-xs font-medium tabular-nums ${group.delta > 0 ? 'text-red-400' : 'text-green-400'}`}
+                                                >
+                                                    {group.delta > 0 ? '▲' : '▼'} {group.delta > 0 ? '+' : '-'}₪{Math.round(Math.abs(group.delta)).toLocaleString()}
+                                                </span>
+                                            )}
+                                            <span className="text-white font-bold tabular-nums">₪{Math.round(group.total).toLocaleString()}</span>
+                                        </div>
                                     </div>
                                     <div className="pl-7 space-y-1 border-l-2 border-gray-600 ml-2">
                                         {group.items.map((item: any) => (
