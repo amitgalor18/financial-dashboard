@@ -315,7 +315,6 @@ export const useFinancialData = () => {
 
     const newCombinedData = calculateProjections(detailedNet);
     setNetWorthDF(newCombinedData);
-    extractLowRiskItems(df);
   }
 
   const loadFromSheetClick = async () => {
@@ -592,32 +591,23 @@ export const useFinancialData = () => {
     setIsNetWorthModalOpen(true);
   };
 
-  const extractLowRiskItems = (fullNetWorthData: Row[]) => {
-    try {
-      if (!fullNetWorthData || fullNetWorthData.length === 0) {
-        setLowRiskItems([]);
-        return;
-      }
-      const headers = Object.keys(fullNetWorthData[0] ?? {});
-      const lastRow = [...fullNetWorthData].reverse().find((r: any) => {
-        const d = toDate(r[headers[0]]);
-        return d instanceof Date && !isNaN(+d);
-      });
-      if (lastRow) {
-        const cash = toNumber(lastRow[headers[1]] ?? 0);
-        const deposits = toNumber(lastRow[headers[2]] ?? 0);
-        const items: PortfolioItem[] = [];
-        if (cash > 0) items.push({ ticker: "CASH", name: "Cash", qty: 1, price: cash, value: cash, category: "Cash" });
-        if (deposits > 0) items.push({ ticker: "MMF+Deposits", name: "MMF & Deposits", qty: 1, price: deposits, value: deposits, category: "MMF & Deposits" });
-        setLowRiskItems(items);
-      } else {
-        setLowRiskItems([]);
-      }
-    } catch (e) {
-      console.warn("Low-risk item extraction failed:", e);
+  // Derive low-risk portfolio items (Cash, MMF) from the latest actual net worth row.
+  // Using netWorthDF (instead of the raw Excel) keeps these in sync after JSON import,
+  // localStorage restore, and manual net worth edits.
+  React.useEffect(() => {
+    const actualRows = netWorthDF.filter(r => r.Type !== 'Projected');
+    if (actualRows.length === 0) {
       setLowRiskItems([]);
+      return;
     }
-  };
+    const lastRow = actualRows[actualRows.length - 1];
+    const cash = toNumber(lastRow.Cash ?? 0);
+    const deposits = toNumber(lastRow.MMF ?? 0);
+    const items: PortfolioItem[] = [];
+    if (cash > 0) items.push({ ticker: "CASH", name: "Cash", qty: 1, price: cash, value: cash, category: "Cash" });
+    if (deposits > 0) items.push({ ticker: "MMF+Deposits", name: "MMF & Deposits", qty: 1, price: deposits, value: deposits, category: "MMF & Deposits" });
+    setLowRiskItems(items);
+  }, [netWorthDF]);
 
   const handleExport = () => {
     if (!incomeExpensesDF.length || !netWorthDF.length) {
@@ -660,9 +650,16 @@ export const useFinancialData = () => {
 
     const importedNetWorth = parseDates(importedState.data.netWorthDF, 'Month').filter((r: DetailedNetWorthRow) => r.Type !== 'Projected');
 
-    setExpensesTime(parseDates(importedState.data.expensesTime, 'Month'));
-    setIncomeTime(parseDates(importedState.data.incomeTime, 'Month'));
+    const importedExpenses = parseDates(importedState.data.expensesTime, 'Month');
+    const importedIncome = parseDates(importedState.data.incomeTime, 'Month');
+    setExpensesTime(importedExpenses);
+    setIncomeTime(importedIncome);
     setPortfolio(importedState.data.portfolio || []);
+    setFinanceStats({
+      months: new Set(importedExpenses.map((r: SeriesRow) => dayjs(r.Month).format('YYYY-MM'))).size,
+      expRows: importedExpenses.length,
+      incRows: importedIncome.length,
+    });
 
     const nextCombinedData = calculateProjections(importedNetWorth);
     setNetWorthDF(nextCombinedData);
